@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* === GLOBAL RESET === */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: radial-gradient(circle at center, #070716 0%, #000010 100%);
+  color: white;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* === ANIMATIONS === */
+@keyframes pulseWave {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+}
+
+.pulse {
+  animation: pulseWave 3s ease-in-out infinite;
+}
+
+/* === GLASS UI === */
+.glass-box {
+  backdrop-filter: blur(20px);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 20px;
+  box-shadow: 0 0 40px rgba(255, 255, 255, 0.08);
+}
+
+/* === PROGRESS BAR === */
+.progress-wrapper {
+  position: fixed;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60%;
+  height: 12px;
+  border-radius: 9999px;
+  overflow: hidden;
+  display: flex;
+  box-shadow: 0 0 20px rgba(255, 255, 255, 0.15);
+}
+
+.progress-section {
+  flex: 1;
+  height: 100%;
+}
+
+.progress-section.red {
+  background: linear-gradient(to right, #ff0059, #ff3b3b);
+}
+.progress-section.yellow {
+  background: linear-gradient(to right, #ffb800, #ffd94a);
+}
+.progress-section.green {
+  background: linear-gradient(to right, #00e676, #2effb9);
+}
