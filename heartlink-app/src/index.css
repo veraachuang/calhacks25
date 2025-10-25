@@ -9,8 +9,9 @@ body,
   margin: 0;
   padding: 0;
   width: 100%;
-  height: 100%;
-  overflow: hidden;
+  min-height: 100%;
+  overflow-y: auto;          /* ✅ allow vertical scrolling */
+  overflow-x: hidden;        /* ✅ still hide horizontal overflow */
   background: radial-gradient(circle at center, #070716 0%, #000010 100%);
   color: white;
   font-family: 'Inter', system-ui, sans-serif;
