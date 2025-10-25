@@ -1,0 +1,64 @@
+# ——— Lens Studio ———
+# Keep scene/ and entities/ in source control. Ignore local caches & backups.
+Cache/
+Backup/
+# Optional: ignore project.data (binary cache). Add back if you want faster recompiles.
+project.data
+# Per-user settings files (4.x and 5.x)
+*.lsproj.user
+*.esproj.user
+# Binary exports you may generate from tooling
+*.lso
+
+# If you add custom heavy previews and don't want them in git, uncomment:
+# Previews/
+
+# ——— Python ———
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.buildozer/
+.eggs/
+*.egg-info/
+.installed.cfg
+*.egg
+wheels/
+dist/
+build/
+develop-eggs/
+downloads/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+
+# ——— Node / Web ———
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# ——— IDEs / Editors ———
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ——— Environment files ———
+.env
+.env.local
+
+# ——— SSL Certificates (Video Chat) ———
+cert.pem
+key.pem
+
+# ——— OS junk ———
+.DS_Store
+Thumbs.db

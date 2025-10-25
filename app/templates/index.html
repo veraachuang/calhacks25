@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>1-1 Video Chat</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>1-1 Video & Voice Chat</h1>
+        
+        <div class="status">
+            <p>Your ID: <strong id="myId">Connecting...</strong></p>
+            <p>Connection Status: <strong id="connectionStatus">Not connected</strong></p>
+        </div>
+
+        <div class="controls">
+            <input type="text" id="roomInput" placeholder="Enter room name (e.g., 'room1')" value="room1">
+            <button id="joinBtn" onclick="joinRoom()">Join Room</button>
+            <button id="callBtn" onclick="startCall()" disabled>Start Call</button>
+            <button id="hangupBtn" onclick="hangUp()" disabled>Hang Up</button>
+        </div>
+
+        <div class="video-container">
+            <div class="video-wrapper">
+                <video id="localVideo" autoplay muted playsinline></video>
+                <p>You (Local)</p>
+            </div>
+            <div class="video-wrapper">
+                <video id="remoteVideo" autoplay playsinline></video>
+                <p>Remote User</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
