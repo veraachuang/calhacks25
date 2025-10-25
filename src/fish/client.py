@@ -15,9 +15,6 @@ class FishSessionManager:
 
     Loads environment configuration and provides access to ASR and TTS sessions.
 
-    Mock mode:
-        When FISH_MOCK=true, all API calls return mock responses without network calls.
-
     Real implementation:
         Will initialize actual HTTP clients with API keys and base URLs for Fish Audio API.
     """

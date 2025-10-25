@@ -63,6 +63,10 @@ key.pem
 sessions/*.json
 sessions/log.csv
 
+# ——— Profile Data (Optional: keep base profiles in git if desired) ———
+# Uncomment the line below to ignore profile files:
+# profiles/*.json
+
 # ——— OS junk ———
 .DS_Store
 Thumbs.db

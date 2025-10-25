@@ -15,6 +15,12 @@ let remoteId;
 let currentRoom;
 let isVideoEnabled = false; // Start with voice-only mode
 
+// STT variables
+let mediaRecorder;
+let audioChunks = [];
+let isRecording = false;
+let sttInterval;
+
 // DOM elements
 const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
@@ -76,6 +82,22 @@ function initializeSocket() {
         console.log('Disconnected from server');
         updateStatus('Disconnected from server');
     });
+
+    socket.on('transcript_update', (data) => {
+        console.log('Transcript:', data.text);
+        displayTranscript(data);
+    });
+
+    socket.on('ai_interjection', (data) => {
+        console.log('AI interjected:', data.message);
+        displayAIInterjection(data.message);
+        // Optionally speak the AI response using TTS
+        speakAIResponse(data.message);
+    });
+
+    socket.on('stt_error', (data) => {
+        console.error('STT Error:', data.error);
+    });
 }
 
 // Join a room
@@ -101,10 +123,81 @@ async function joinRoom() {
         localVideo.srcObject = localStream;
         toggleVideoBtn.disabled = false;
         updateStatus(isVideoEnabled ? 'Camera and microphone ready' : 'Microphone ready (voice only)');
+
+        // Start automatic STT
+        startAutomaticSTT();
     } catch (error) {
         console.error('Error accessing media devices:', error);
         alert('Could not access camera/microphone. Please check permissions.');
     }
+}
+
+// Start automatic speech-to-text capture
+function startAutomaticSTT() {
+    if (!localStream) {
+        console.error('No local stream available');
+        return;
+    }
+
+    // Create MediaRecorder to capture audio
+    const options = { mimeType: 'audio/webm' };
+    mediaRecorder = new MediaRecorder(localStream, options);
+
+    mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+            audioChunks.push(event.data);
+        }
+    };
+
+    mediaRecorder.onstop = () => {
+        // Convert audio chunks to blob and send to server
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        audioChunks = [];
+
+        // Convert to base64 and send via socket
+        const reader = new FileReader();
+        reader.readAsDataURL(audioBlob);
+        reader.onloadend = () => {
+            const base64Audio = reader.result.split(',')[1];
+            socket.emit('audio_chunk', {
+                audio: base64Audio,
+                room: currentRoom
+            });
+        };
+
+        // Restart recording for continuous capture
+        if (isRecording) {
+            mediaRecorder.start();
+            setTimeout(() => {
+                if (isRecording && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                }
+            }, 3000); // Capture 3-second chunks
+        }
+    };
+
+    // Start recording
+    isRecording = true;
+    mediaRecorder.start();
+
+    // Stop after 3 seconds to create chunks
+    setTimeout(() => {
+        if (isRecording && mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+        }
+    }, 3000);
+
+    console.log('Automatic STT started');
+    updateStatus('Speech-to-text active');
+}
+
+// Stop automatic STT
+function stopAutomaticSTT() {
+    isRecording = false;
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+    }
+    console.log('Automatic STT stopped');
 }
 
 // Start a call
@@ -230,6 +323,7 @@ function hangUp() {
         peerConnection = null;
     }
 
+    stopAutomaticSTT();
     remoteVideo.srcObject = null;
     callBtn.disabled = false;
     hangupBtn.disabled = true;
@@ -275,7 +369,66 @@ function updateStatus(message) {
     console.log('Status:', message);
 }
 
+// Display transcript in console (can be extended to UI)
+function displayTranscript(data) {
+    console.log(`[Transcript] User ${data.user_id}: ${data.text}`);
+    // Could add UI element to show transcripts in real-time
+}
+
+// Display AI interjection
+function displayAIInterjection(message) {
+    console.log(`[AI Agent] ${message}`);
+    updateStatus(`AI: ${message.substring(0, 50)}...`);
+
+    // Show notification or UI popup
+    if (Notification.permission === 'granted') {
+        new Notification('AI Assistant', {
+            body: message,
+            icon: '/static/images/ai-icon.png'
+        });
+    }
+}
+
+// Speak AI response using Fish Audio TTS
+async function speakAIResponse(text) {
+    try {
+        const response = await fetch('/api/tts', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ text: text })
+        });
+
+        const data = await response.json();
+
+        if (data.audio) {
+            // Decode base64 audio and play it
+            const audioData = atob(data.audio);
+            const arrayBuffer = new ArrayBuffer(audioData.length);
+            const view = new Uint8Array(arrayBuffer);
+            for (let i = 0; i < audioData.length; i++) {
+                view[i] = audioData.charCodeAt(i);
+            }
+
+            const audioBlob = new Blob([arrayBuffer], { type: 'audio/wav' });
+            const audioUrl = URL.createObjectURL(audioBlob);
+            const audio = new Audio(audioUrl);
+
+            audio.play();
+            console.log('Playing AI response audio');
+        }
+    } catch (error) {
+        console.error('Error playing AI response:', error);
+    }
+}
+
 // Initialize on page load
 window.addEventListener('load', () => {
     initializeSocket();
+
+    // Request notification permission
+    if (Notification.permission === 'default') {
+        Notification.requestPermission();
+    }
 });
