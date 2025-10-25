@@ -59,6 +59,10 @@ yarn-error.log*
 cert.pem
 key.pem
 
+# ——— Session Data ———
+sessions/*.json
+sessions/log.csv
+
 # ——— OS junk ———
 .DS_Store
 Thumbs.db
