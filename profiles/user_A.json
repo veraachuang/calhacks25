@@ -1,0 +1,15 @@
+{
+  "user_id": "user_A",
+  "name": "User A",
+  "personality_type": "introvert",
+  "hobbies": [
+    "reading",
+    "photography"
+  ],
+  "goal": "find new friends",
+  "age": 25,
+  "interests": [
+    "technology",
+    "art"
+  ]
+}
