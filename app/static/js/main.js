@@ -13,6 +13,7 @@ let peerConnection;
 let myId;
 let remoteId;
 let currentRoom;
+let isVideoEnabled = false; // Start with voice-only mode
 
 // DOM elements
 const localVideo = document.getElementById('localVideo');
@@ -22,6 +23,7 @@ const statusElement = document.getElementById('connectionStatus');
 const joinBtn = document.getElementById('joinBtn');
 const callBtn = document.getElementById('callBtn');
 const hangupBtn = document.getElementById('hangupBtn');
+const toggleVideoBtn = document.getElementById('toggleVideoBtn');
 const roomInput = document.getElementById('roomInput');
 
 // Initialize Socket.IO connection
@@ -93,11 +95,12 @@ async function joinRoom() {
     // Get local media
     try {
         localStream = await navigator.mediaDevices.getUserMedia({
-            video: true,
+            video: isVideoEnabled,
             audio: true
         });
         localVideo.srcObject = localStream;
-        updateStatus('Camera and microphone ready');
+        toggleVideoBtn.disabled = false;
+        updateStatus(isVideoEnabled ? 'Camera and microphone ready' : 'Microphone ready (voice only)');
     } catch (error) {
         console.error('Error accessing media devices:', error);
         alert('Could not access camera/microphone. Please check permissions.');
@@ -231,6 +234,39 @@ function hangUp() {
     callBtn.disabled = false;
     hangupBtn.disabled = true;
     updateStatus('Call ended');
+}
+
+// Toggle video on/off
+function toggleVideo() {
+    const videoTrack = localStream.getVideoTracks()[0];
+    
+    if (videoTrack) {
+        isVideoEnabled = !videoTrack.enabled;
+        videoTrack.enabled = isVideoEnabled;
+        toggleVideoBtn.textContent = isVideoEnabled ? '📹 Video Off' : '📹 Video On';
+        updateStatus(isVideoEnabled ? 'Video enabled' : 'Video disabled (voice only)');
+    } else {
+        // No video track, need to add one
+        navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+            .then(stream => {
+                const videoTrack = stream.getVideoTracks()[0];
+                localStream.addTrack(videoTrack);
+                localVideo.srcObject = localStream;
+                
+                // Add to peer connection if active
+                if (peerConnection) {
+                    peerConnection.addTrack(videoTrack, localStream);
+                }
+                
+                isVideoEnabled = true;
+                toggleVideoBtn.textContent = '📹 Video Off';
+                updateStatus('Video enabled');
+            })
+            .catch(error => {
+                console.error('Error enabling video:', error);
+                alert('Could not enable video');
+            });
+    }
 }
 
 // Update status display

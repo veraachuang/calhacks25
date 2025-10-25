@@ -107,6 +107,16 @@ button {
     transform: translateY(-2px);
 }
 
+#toggleVideoBtn {
+    background: #ed8936;
+    color: white;
+}
+
+#toggleVideoBtn:hover:not(:disabled) {
+    background: #dd6b20;
+    transform: translateY(-2px);
+}
+
 button:disabled {
     background: #ccc;
     cursor: not-allowed;
