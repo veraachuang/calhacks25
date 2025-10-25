@@ -333,6 +333,7 @@ def handle_audio_chunk(data):
     try:
         user_id = request.sid
         room = active_users.get(user_id, 'default')
+        session_id = user_sessions.get(user_id)
 
         # Decode base64 audio data
         audio_data = base64.b64decode(data['audio'])
@@ -348,12 +349,27 @@ def handle_audio_chunk(data):
         if not is_meaningful_transcript(transcript, len(audio_data)):
             return
 
-        # Initialize buffer if not exists
+        import time
+
+        # Store in session manager if user is in a session
+        if session_id:
+            try:
+                session = session_manager.load_session(session_id)
+                if session:
+                    # Determine speaker role (A or B)
+                    speaker = 'A' if session['user_a'] == user_id else 'B'
+
+                    # Add to session transcript
+                    session_manager.append_transcript(session_id, speaker, transcript)
+
+                    print(f"Added to session {session_id} - {speaker}: {transcript}")
+            except Exception as e:
+                print(f"Error adding to session manager: {e}")
+
+        # Also maintain room buffer for AI interjection logic
         if room not in transcript_buffers:
             transcript_buffers[room] = []
 
-        # Add transcript to buffer with timestamp
-        import time
         transcript_buffers[room].append({
             'user_id': user_id,
             'text': transcript,
@@ -363,7 +379,8 @@ def handle_audio_chunk(data):
         # Emit transcript back to all users in room
         emit('transcript_update', {
             'user_id': user_id,
-            'text': transcript
+            'text': transcript,
+            'session_id': session_id
         }, room=room)
 
         print(f"Transcribed from {user_id}: {transcript}")
@@ -378,26 +395,61 @@ def handle_audio_chunk(data):
         print(f"Error processing audio chunk: {e}")
         emit('stt_error', {'error': str(e)})
 
-@app.route('/api/transcript/buffer/<room>', methods=['GET'])
-def get_transcript_buffer(room):
+@app.route('/api/transcript/buffer/<room_or_session>', methods=['GET'])
+def get_transcript_buffer(room_or_session):
     """
-    Get the current transcript buffer for a room.
+    Get the current transcript buffer for a room or session.
+    Supports both legacy room-based and new session-based transcripts.
     """
-    buffer = transcript_buffers.get(room, [])
+    # Try session manager first
+    session_transcript = session_manager.get_session_transcript(room_or_session)
+
+    if session_transcript:
+        # Return session-based transcript
+        return jsonify({
+            'session_id': room_or_session,
+            'transcript_count': len(session_transcript),
+            'transcripts': session_transcript,
+            'source': 'session_manager'
+        })
+
+    # Fallback to room-based buffer
+    buffer = transcript_buffers.get(room_or_session, [])
     return jsonify({
-        'room': room,
+        'room': room_or_session,
         'transcript_count': len(buffer),
-        'transcripts': buffer
+        'transcripts': buffer,
+        'source': 'room_buffer'
     })
 
-@app.route('/api/transcript/clear/<room>', methods=['POST'])
-def clear_transcript_buffer(room):
+@app.route('/api/transcript/clear/<room_or_session>', methods=['POST'])
+def clear_transcript_buffer(room_or_session):
     """
-    Clear the transcript buffer for a room.
+    Clear the transcript buffer for a room or session.
+    Clears both session manager and room buffer if they exist.
     """
-    if room in transcript_buffers:
-        transcript_buffers[room] = []
-    return jsonify({'success': True, 'room': room})
+    cleared = []
+
+    # Clear session manager transcript
+    try:
+        session = session_manager.load_session(room_or_session)
+        if session:
+            session['transcript'] = []
+            session_manager.sessions[room_or_session] = session
+            cleared.append('session_manager')
+    except:
+        pass
+
+    # Clear room buffer
+    if room_or_session in transcript_buffers:
+        transcript_buffers[room_or_session] = []
+        cleared.append('room_buffer')
+
+    return jsonify({
+        'success': True,
+        'room_or_session': room_or_session,
+        'cleared': cleared
+    })
 
 @app.route('/api/tts', methods=['POST'])
 def tts_endpoint():
