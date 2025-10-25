@@ -1,0 +1,422 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Zap, Palette } from 'lucide-react';
+import * as THREE from 'three';
+
+export default function ProfilePage() {
+  const [avatarName, setAvatarName] = useState('');
+  const [spiceLevel, setSpiceLevel] = useState(2);
+  const [flameColor, setFlameColor] = useState('orange');
+  const [personality, setPersonality] = useState('');
+  const [hobbies, setHobbies] = useState('');
+  const [lookingFor, setLookingFor] = useState('');
+  const [titleColorIndex, setTitleColorIndex] = useState(0);
+  const canvasRef = useRef(null);
+  const sceneRef = useRef(null);
+
+  // Cycle through colors for title
+  const titleColors = [
+    '#ff0000', // red
+    '#ff4500', // orange-red
+    '#ff6600', // orange
+    '#ffa500', // light orange
+    '#ffcc00', // yellow-orange
+    '#ffff00', // yellow
+  ];
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTitleColorIndex((prev) => (prev + 1) % titleColors.length);
+    }, 500);
+    return () => clearInterval(interval);
+  }, []);
+
+  const flameColors = [
+    { id: 'orange', name: 'Classic', color: 0xff4500 },
+    { id: 'blue', name: 'Cool Blue', color: 0x4169e1 },
+    { id: 'purple', name: 'Mystic', color: 0x8b00ff },
+    { id: 'green', name: 'Emerald', color: 0x00ff41 },
+    { id: 'pink', name: 'Hot Pink', color: 0xff1493 },
+    { id: 'white', name: 'Pure', color: 0xffffff }
+  ];
+
+  const spiceLevels = [
+    { level: 1, label: 'Spark', desc: 'Light & casual vibes', color: 'from-blue-400 to-cyan-400' },
+    { level: 2, label: 'Warm', desc: 'Friendly & engaging', color: 'from-green-400 to-emerald-400' },
+    { level: 3, label: 'Hot', desc: 'Deep & meaningful', color: 'from-orange-400 to-amber-400' },
+    { level: 4, label: 'Inferno', desc: 'Bold & unfiltered', color: 'from-red-400 to-rose-400' }
+  ];
+
+  const getCurrentColor = () => {
+    return flameColors.find(f => f.id === flameColor)?.color || 0xff4500;
+  };
+
+  useEffect(() => {
+    if (!canvasRef.current) return;
+
+    // Scene setup
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ 
+      canvas: canvasRef.current, 
+      alpha: true,
+      antialias: true 
+    });
+    
+    renderer.setSize(200, 200);
+    camera.position.z = 5;
+
+    sceneRef.current = scene;
+
+    // Create flame particles
+    const flameParticles = [];
+    const particleCount = 180;
+    
+    for (let i = 0; i < particleCount; i++) {
+      const size = Math.random() * 0.25 + 0.1;
+      const geometry = new THREE.SphereGeometry(size, 8, 8);
+      const material = new THREE.MeshBasicMaterial({
+        color: getCurrentColor(),
+        transparent: true,
+        opacity: 0.8
+      });
+      const particle = new THREE.Mesh(geometry, material);
+      
+      // Position particles in teardrop flame shape
+      const heightRatio = Math.random();
+      const angle = Math.random() * Math.PI * 2;
+      
+      // Teardrop shape: wider in the middle, narrow at top and bottom
+      let width;
+      if (heightRatio < 0.3) {
+        // Bottom - narrow
+        width = 0.15 + (heightRatio / 0.3) * 0.25;
+      } else if (heightRatio < 0.6) {
+        // Middle - widest part
+        width = 0.4 - ((heightRatio - 0.3) / 0.3) * 0.05;
+      } else {
+        // Top - tapering to point
+        width = 0.35 - ((heightRatio - 0.6) / 0.4) * 0.33;
+      }
+      
+      const radius = Math.random() * width;
+      
+      particle.position.x = Math.cos(angle) * radius;
+      particle.position.z = Math.sin(angle) * radius;
+      particle.position.y = (heightRatio * 2.2) - 0.3;
+      
+      particle.userData = {
+        speed: Math.random() * 0.015 + 0.008,
+        wobble: Math.random() * 0.06,
+        wobbleSpeed: Math.random() * 2 + 1,
+        angle: angle,
+        baseRadius: radius,
+        heightRatio: heightRatio,
+        startY: particle.position.y
+      };
+      
+      scene.add(particle);
+      flameParticles.push(particle);
+    }
+
+    // Add lights
+    const pointLight = new THREE.PointLight(getCurrentColor(), 2, 10);
+    pointLight.position.set(0, 0, 0);
+    scene.add(pointLight);
+
+    const ambientLight = new THREE.AmbientLight(0x404040);
+    scene.add(ambientLight);
+
+    // Animation
+    let time = 0;
+    const animate = () => {
+      requestAnimationFrame(animate);
+      time += 0.016;
+
+      // Animate flame particles
+      flameParticles.forEach((particle, i) => {
+        // Rise up
+        particle.position.y += particle.userData.speed;
+        
+        // Calculate current width based on height for teardrop
+        const heightPos = (particle.position.y + 0.3) / 2.2;
+        let currentWidth;
+        if (heightPos < 0.3) {
+          currentWidth = 0.15 + (heightPos / 0.3) * 0.25;
+        } else if (heightPos < 0.6) {
+          currentWidth = 0.4 - ((heightPos - 0.3) / 0.3) * 0.05;
+        } else {
+          currentWidth = 0.35 - ((heightPos - 0.6) / 0.4) * 0.33;
+        }
+        
+        const widthRatio = currentWidth / 0.4;
+        const currentRadius = particle.userData.baseRadius * widthRatio;
+        
+        // Wobble side to side
+        const wobbleX = Math.sin(time * particle.userData.wobbleSpeed + i) * particle.userData.wobble;
+        const wobbleZ = Math.cos(time * particle.userData.wobbleSpeed + i) * particle.userData.wobble;
+        
+        particle.position.x = Math.cos(particle.userData.angle) * currentRadius + wobbleX;
+        particle.position.z = Math.sin(particle.userData.angle) * currentRadius + wobbleZ;
+        
+        // Gradient color based on height
+        const baseColor = getCurrentColor();
+        if (heightPos < 0.2) {
+          // Bottom - darker red/orange
+          particle.material.color.setHex(0xff3300);
+        } else if (heightPos < 0.4) {
+          // Lower middle - orange
+          particle.material.color.setHex(0xff6600);
+        } else if (heightPos < 0.6) {
+          // Middle - bright orange/yellow
+          particle.material.color.setHex(baseColor);
+        } else if (heightPos < 0.8) {
+          // Upper - yellow
+          particle.material.color.setHex(0xffaa00);
+        } else {
+          // Top - bright yellow/white
+          particle.material.color.setHex(0xffff88);
+        }
+        
+        // Fade out as it rises
+        particle.material.opacity = Math.max(0, 1 - (particle.position.y + 0.3) / 2.5);
+        
+        // Reset when too high
+        if (particle.position.y > 1.9) {
+          particle.position.y = -0.3;
+          particle.material.opacity = 0.8;
+        }
+      });
+
+      // Flicker light
+      pointLight.intensity = 2 + Math.sin(time * 5) * 0.3;
+      pointLight.color.setHex(getCurrentColor());
+
+      // Update particle colors
+      flameParticles.forEach(particle => {
+        particle.material.color.setHex(getCurrentColor());
+      });
+
+      renderer.render(scene, camera);
+    };
+
+    animate();
+
+    return () => {
+      renderer.dispose();
+      flameParticles.forEach(p => {
+        p.geometry.dispose();
+        p.material.dispose();
+      });
+    };
+  }, [flameColor]);
+
+  const handleStartMatching = () => {
+    if (avatarName && personality && hobbies && lookingFor) {
+      alert('Ready to find your match! (Next: Loading/Matching screen)');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-gray-800 p-4 overflow-y-auto">
+      <div className="w-full max-w-4xl mx-auto py-8">
+        <div className="text-center mb-8">
+          <h1 className="text-5xl font-bold text-white mb-4" style={{ 
+            fontFamily: '"Roboto Mono", monospace', 
+            textShadow: '0 0 10px #ff6600, 0 0 20px #ff4400, 0 0 30px #ff2200, 0 0 40px #ff0000, 0 0 70px #ff0000, 0 0 80px #ff0000, 0 0 100px #ff0000',
+            filter: 'brightness(1.2)',
+            letterSpacing: '0.05em'
+          }}>
+            Flames
+          </h1>
+          <p className="text-gray-300">Connect through conversation, reveal when ready</p>
+        </div>
+
+        <div className="bg-gray-800/50 backdrop-blur-lg rounded-2xl p-8 shadow-2xl border border-gray-700">
+          
+          <div className="grid md:grid-cols-2 gap-8">
+            <div>
+              <label className="flex items-center gap-2 text-white text-lg font-semibold mb-4">
+                <Palette className="w-5 h-5" />
+                Customize Your Flame
+              </label>
+
+              <div className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-2xl p-8 mb-6 flex items-center justify-center border border-gray-700 relative overflow-hidden">
+                <canvas ref={canvasRef} className="relative z-10" />
+                
+                <div className="absolute bottom-4 left-0 right-0 text-center z-20">
+                  <p className="text-gray-400 text-xs">Preview - Level 1</p>
+                  <p className="text-gray-500 text-xs mt-1">Flame grows as connection deepens</p>
+                </div>
+              </div>
+
+              <div className="space-y-5">
+                <div>
+                  <label className="text-white text-sm font-medium mb-3 block">Flame Color</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {flameColors.map((flame) => (
+                      <button
+                        key={flame.id}
+                        onClick={() => setFlameColor(flame.id)}
+                        className={`relative p-3 rounded-lg transition-all ${
+                          flameColor === flame.id
+                            ? 'ring-2 ring-white scale-105'
+                            : 'hover:scale-105'
+                        }`}
+                        style={{
+                          background: `#${flame.color.toString(16).padStart(6, '0')}`
+                        }}
+                      >
+                        <span className="text-white text-xs font-medium drop-shadow-lg">
+                          {flame.name}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-orange-900/20 border border-orange-500/30 rounded-lg p-3">
+                  <p className="text-orange-200 text-xs leading-relaxed">
+                    💡 <strong>How it works:</strong> Your flame starts small and grows as you and your match connect. Reach Level 4 to unlock face reveal!
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col">
+              <div className="mb-6">
+                <label className="text-white text-lg font-semibold mb-3 block">
+                  Avatar Name
+                </label>
+                <input
+                  type="text"
+                  value={avatarName}
+                  onChange={(e) => setAvatarName(e.target.value)}
+                  placeholder="Enter your alias..."
+                  className="w-full bg-gray-700/50 border border-gray-600 rounded-xl px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
+                  maxLength={20}
+                />
+              </div>
+
+              {/* Personality Type */}
+              <div className="mb-6">
+                <label className="text-white text-lg font-semibold mb-3 block">
+                  Personality Type
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => setPersonality('introvert')}
+                    className={`py-3 px-4 rounded-xl font-medium transition-all ${
+                      personality === 'introvert'
+                        ? 'bg-gradient-to-r from-purple-500 to-blue-500 text-white shadow-lg'
+                        : 'bg-gray-700/30 text-gray-300 hover:bg-gray-700/50'
+                    }`}
+                  >
+                    Introvert
+                  </button>
+                  <button
+                    onClick={() => setPersonality('extrovert')}
+                    className={`py-3 px-4 rounded-xl font-medium transition-all ${
+                      personality === 'extrovert'
+                        ? 'bg-gradient-to-r from-pink-500 to-orange-500 text-white shadow-lg'
+                        : 'bg-gray-700/30 text-gray-300 hover:bg-gray-700/50'
+                    }`}
+                  >
+                    Extrovert
+                  </button>
+                </div>
+              </div>
+
+              {/* Hobbies */}
+              <div className="mb-6">
+                <label className="text-white text-lg font-semibold mb-3 block">
+                  What are your hobbies?
+                </label>
+                <textarea
+                  value={hobbies}
+                  onChange={(e) => setHobbies(e.target.value)}
+                  placeholder="e.g., Gaming, reading, hiking..."
+                  className="w-full bg-gray-700/50 border border-gray-600 rounded-xl px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all resize-none"
+                  rows={3}
+                  maxLength={150}
+                />
+                <p className="text-gray-500 text-xs mt-1">{hobbies.length}/150</p>
+              </div>
+
+              {/* Looking For */}
+              <div className="mb-6">
+                <label className="text-white text-lg font-semibold mb-3 block">
+                  What are you looking for?
+                </label>
+                <textarea
+                  value={lookingFor}
+                  onChange={(e) => setLookingFor(e.target.value)}
+                  placeholder="e.g., Deep conversations, new friends, casual chat..."
+                  className="w-full bg-gray-700/50 border border-gray-600 rounded-xl px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all resize-none"
+                  rows={3}
+                  maxLength={150}
+                />
+                <p className="text-gray-500 text-xs mt-1">{lookingFor.length}/150</p>
+              </div>
+
+              <div className="flex-1">
+                <label className="flex items-center gap-2 text-white text-lg font-semibold mb-4">
+                  <Zap className="w-5 h-5" />
+                  Conversation Intensity
+                </label>
+                
+                <div className="space-y-3">
+                  {spiceLevels.map((level) => (
+                    <button
+                      key={level.level}
+                      onClick={() => setSpiceLevel(level.level)}
+                      className={`w-full p-4 rounded-xl transition-all transform hover:scale-102 ${
+                        spiceLevel === level.level
+                          ? `bg-gradient-to-r ${level.color} text-white shadow-lg`
+                          : 'bg-gray-700/30 text-gray-300 hover:bg-gray-700/50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="text-left">
+                          <div className="font-bold text-lg">{level.label}</div>
+                          <div className={`text-sm ${spiceLevel === level.level ? 'text-white/90' : 'text-gray-400'}`}>
+                            {level.desc}
+                          </div>
+                        </div>
+                        <div className="flex gap-1">
+                          {[...Array(level.level)].map((_, i) => (
+                            <div
+                              key={i}
+                              className={`w-2 h-8 rounded-full ${
+                                spiceLevel === level.level ? 'bg-white/80' : 'bg-gray-500'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={handleStartMatching}
+            disabled={!avatarName || !personality || !hobbies || !lookingFor}
+            className={`w-full py-4 rounded-xl font-bold text-lg transition-all transform mt-8 ${
+              avatarName && personality && hobbies && lookingFor
+                ? 'bg-gradient-to-r from-orange-500 to-red-500 text-white hover:scale-105 hover:shadow-2xl'
+                : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+            }`}
+          >
+            {avatarName && personality && hobbies && lookingFor ? 'Find Your Match' : 'Complete Your Profile'}
+          </button>
+        </div>
+
+        <div className="text-center mt-6 text-gray-400 text-sm">
+          <p>Voice-only chat • AI-mediated • Flame grows as connection deepens</p>
+        </div>
+      </div>
+    </div>
+  );
+}
