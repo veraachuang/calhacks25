@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Zap, Palette } from "lucide-react";
 import * as THREE from "three";
 import { useNavigate } from "react-router-dom";
+import logo from "./logo2.png";
 
 export default function ProfilePage() {
   const [avatarName, setAvatarName] = useState("");
@@ -172,17 +173,16 @@ export default function ProfilePage() {
     <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-gray-800 p-4 overflow-y-auto">
       <div className="w-full max-w-4xl mx-auto py-8">
         {/* Header */}
-        <div className="text-center mb-8">
-          <h1
-            className="text-5xl font-bold text-white mb-4"
-            style={{
-              fontFamily: '"Roboto Mono", monospace',
-              textShadow: "0 0 10px #ff6600, 0 0 20px #ff4400, 0 0 40px #ff0000",
-            }}
-          >
-            Flames
-          </h1>
-          <p className="text-gray-300">Connect through conversation, reveal when ready</p>
+        {/* Logo Header */}
+        <div className="text-center mb-4 flex flex-col items-center">
+        <img
+            src={logo}
+            alt="Flames Logo"
+            className="w-40 md:w-52 lg:w-60 drop-shadow-[0_0_25px_rgba(255,100,0,0.5)] transition-transform duration-300 hover:scale-105"
+        />
+        <p className="text-gray-300 text-sm mt-2 tracking-wide">
+            Connect through conversation, reveal when ready
+        </p>
         </div>
 
         {/* Main Card */}
