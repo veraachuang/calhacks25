@@ -28,7 +28,11 @@ socketio = SocketIO(
     max_http_buffer_size=10**8,
     ping_timeout=60,          # Wait 60s for pong response before disconnecting
     ping_interval=25,         # Send ping every 25s to keep connection alive
-    async_mode='eventlet'     # Use eventlet for better async handling
+    async_mode='eventlet',    # Use eventlet for better async handling
+    engineio_logger=False,    # Reduce logging noise
+    logger=False,
+    # Increase limits to handle audio streaming
+    max_decode_packets=100,   # Allow more packets in single payload (default is 16)
 )
 
 # Store active users and their sessions

@@ -70,9 +70,10 @@ export default function HeartLinkScene() {
         // Set up WebRTC service with socket
         webrtcService.setSocket(socket);
 
-        // Get local media (audio only by default)
+        // Get local media (audio only by default, video off)
         await webrtcService.getLocalMedia(false);
         setIsConnected(true);
+        setIsVideoEnabled(false); // Video OFF by default
 
         // Set up stream callbacks
         webrtcService.onLocalStream = (stream) => {
@@ -392,18 +393,11 @@ export default function HeartLinkScene() {
         </span>
       </div>
 
-      {/* Video Toggle Button */}
-      <button
-        onClick={handleToggleVideo}
-        disabled={!isConnected}
-        className="absolute top-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-white/10 text-gray-300 hover:text-white border border-white/20 backdrop-blur-md z-20 disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {isVideoEnabled ? "📹 Hide Video" : "📹 Show Video"}
-      </button>
 
-      {/* Match button */}
+      {/* Match button - turns on camera */}
       <div className="absolute top-[60px] left-1/2 -translate-x-1/2 z-20">
         <button
+          onClick={handleToggleVideo}
           disabled={!matchReady}
           className={`px-6 py-2 rounded-full font-semibold border backdrop-blur-md transition-all ${
             matchReady
@@ -411,7 +405,7 @@ export default function HeartLinkScene() {
               : "bg-white/10 text-gray-400 border-white/20 cursor-not-allowed"
           }`}
         >
-          💞 Match
+          {isVideoEnabled ? "📹 Video On" : "💞 Match"}
         </button>
       </div>
 
