@@ -38,10 +38,7 @@ def demo_session_management():
     # 3. Add transcript entries
     print("3️⃣ Adding conversation transcript...")
     session_manager.append_transcript(session_id, "A", "Hey! Nice to meet you!")
-    session_manager.append_transcript(session_id, "B", "Hi! How's it going?")
-    session_manager.append_transcript(session_id, "A", "Pretty good! What do you like to do for fun?")
-    session_manager.append_transcript(session_id, "B", "I love hiking and photography. You?")
-    session_manager.append_transcript(session_id, "AGENT", "Great start! Let's dive deeper into shared interests.")
+    session_manager.append_transcript(session_id, "B", "Hi!")
     print("   ✅ Added 5 transcript entries")
     
     print_separator()
