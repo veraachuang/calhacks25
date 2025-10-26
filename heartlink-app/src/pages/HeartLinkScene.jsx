@@ -69,14 +69,29 @@ export default function HeartLinkScene() {
 
         // Set up stream callbacks
         webrtcService.onLocalStream = (stream) => {
+          console.log('🎤 Local stream received:', stream.getTracks().map(t => `${t.kind}: ${t.enabled}`));
           if (localVideoRef.current) {
             localVideoRef.current.srcObject = stream;
+            console.log('✅ Local video element updated');
+          } else {
+            console.log('⚠️ Local video ref not ready');
           }
         };
 
         webrtcService.onRemoteStream = (stream) => {
+          console.log('🎥 Remote stream received:', stream.getTracks().map(t => `${t.kind}: ${t.enabled}`));
           if (remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = stream;
+            console.log('✅ Remote video element updated');
+          } else {
+            console.log('⚠️ Remote video ref not ready, will retry...');
+            // Retry after a short delay if video element isn't ready
+            setTimeout(() => {
+              if (remoteVideoRef.current) {
+                remoteVideoRef.current.srcObject = stream;
+                console.log('✅ Remote video element updated (retry)');
+              }
+            }, 500);
           }
           setPeerConnected(true);
         };
@@ -357,30 +372,38 @@ export default function HeartLinkScene() {
       {/* Flames or Video */}
       <div className="absolute inset-0 flex items-center justify-between px-24 pointer-events-none">
         <div className="flex flex-col items-center">
-          {!isVideoEnabled ? (
-            <canvas ref={flame1Ref} className="w-[200px] h-[200px]" />
-          ) : (
-            <video 
-              ref={localVideoRef} 
-              autoPlay 
-              muted 
-              playsInline 
-              className="w-[300px] h-[225px] rounded-2xl border-2 border-white/20 shadow-xl pointer-events-auto"
-            />
-          )}
+          {/* Canvas flame (shown when video disabled) */}
+          {!isVideoEnabled && <canvas ref={flame1Ref} className="w-[200px] h-[200px]" />}
+          
+          {/* Video element (always in DOM for audio, but hidden when video disabled) */}
+          <video 
+            ref={localVideoRef} 
+            autoPlay 
+            muted 
+            playsInline 
+            className={`rounded-2xl border-2 border-white/20 shadow-xl pointer-events-auto ${
+              isVideoEnabled 
+                ? "w-[300px] h-[225px]" 
+                : "hidden"
+            }`}
+          />
           <p className="text-white/80 font-semibold mt-3">{avatarName}</p>
         </div>
         <div className="flex flex-col items-center">
-          {!isVideoEnabled ? (
-            <canvas ref={flame2Ref} className="w-[200px] h-[200px]" />
-          ) : (
-            <video 
-              ref={remoteVideoRef} 
-              autoPlay 
-              playsInline 
-              className="w-[300px] h-[225px] rounded-2xl border-2 border-white/20 shadow-xl pointer-events-auto"
-            />
-          )}
+          {/* Canvas flame (shown when video disabled) */}
+          {!isVideoEnabled && <canvas ref={flame2Ref} className="w-[200px] h-[200px]" />}
+          
+          {/* Video element (always in DOM for audio, but hidden when video disabled) */}
+          <video 
+            ref={remoteVideoRef} 
+            autoPlay 
+            playsInline 
+            className={`rounded-2xl border-2 border-white/20 shadow-xl pointer-events-auto ${
+              isVideoEnabled 
+                ? "w-[300px] h-[225px]" 
+                : "hidden"
+            }`}
+          />
           <p className="text-white/80 font-semibold mt-3">{remoteUserName}</p>
         </div>
       </div>
