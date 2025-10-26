@@ -39,6 +39,13 @@ export default function HeartLinkScene() {
     userRole = null,
   } = location.state || {};
 
+  // Debug log
+  console.log('🔍 HeartLinkScene initialized with:', {
+    sessionId,
+    userRole,
+    avatarName,
+  });
+
   const flameColors = {
     orange: 0xff4500,
     blue: 0x4169e1,
@@ -81,14 +88,35 @@ export default function HeartLinkScene() {
         webrtcService.onRemoteStream = (stream) => {
           console.log('🎥 Remote stream received:', stream.getTracks().map(t => `${t.kind}: ${t.enabled}`));
           if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = stream;
-            console.log('✅ Remote video element updated');
+            const videoEl = remoteVideoRef.current;
+            videoEl.srcObject = stream;
+            
+            // Ensure volume is up and not muted
+            videoEl.volume = 1.0;
+            videoEl.muted = false;
+            
+            console.log('🔊 Video element settings:', {
+              volume: videoEl.volume,
+              muted: videoEl.muted,
+              paused: videoEl.paused
+            });
+            
+            // Explicitly play the video element to ensure audio plays
+            videoEl.play().then(() => {
+              console.log('✅ Remote video element updated and playing');
+              console.log('   Final state - volume:', videoEl.volume, 'muted:', videoEl.muted);
+            }).catch(err => {
+              console.warn('⚠️ Autoplay prevented, user interaction may be needed:', err);
+            });
           } else {
             console.log('⚠️ Remote video ref not ready, will retry...');
             // Retry after a short delay if video element isn't ready
             setTimeout(() => {
               if (remoteVideoRef.current) {
                 remoteVideoRef.current.srcObject = stream;
+                remoteVideoRef.current.play().catch(err => {
+                  console.warn('⚠️ Autoplay prevented (retry):', err);
+                });
                 console.log('✅ Remote video element updated (retry)');
               }
             }, 500);
@@ -99,6 +127,8 @@ export default function HeartLinkScene() {
         // Listen for user joined (peer available)
         socket.on('user_joined', (data) => {
           console.log('👤 Peer joined:', data.id);
+          console.log('   My role:', userRole);
+          console.log('   Should I call?', userRole === 'B' ? 'YES (I am User B)' : 'NO (I am User A, waiting)');
           setPeerConnected(true);
           
           // Only User B (joiner) initiates the call to avoid both peers calling
@@ -115,23 +145,11 @@ export default function HeartLinkScene() {
         console.log('🔄 Re-joining matchmaking room to sync with peers...');
         socketService.joinRoom('matchmaking');
 
-        // Check if peer is already in the session (for User B joining after User A)
+        // If we're User B, request the session info to get User A's socket ID
         if (sessionId && userRole === 'B') {
-          try {
-            const session = await apiService.getSession(sessionId);
-            if (session && session.participants && session.participants.A) {
-              console.log('👤 Peer (User A) already in session, initiating call...');
-              // Set the remote ID from the session
-              if (webrtcService.socket) {
-                webrtcService.remoteId = session.participants.A;
-              }
-              setPeerConnected(true);
-              // Give time for the peer to set up their listeners
-              setTimeout(() => webrtcService.startCall(), 1500);
-            }
-          } catch (error) {
-            console.error('Failed to check session state:', error);
-          }
+          console.log('🔍 User B checking for User A in session...');
+          // Ask backend to tell us about User A
+          socket.emit('request_peer_info', { session_id: sessionId });
         }
 
         // Listen for transcript updates

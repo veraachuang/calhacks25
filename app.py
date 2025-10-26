@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit, join_room, leave_room
+from flask_cors import CORS
 from app import routes
 from app import session_manager
 from app import profile_manager
@@ -17,6 +18,10 @@ from fish import stream_asr, stream_tts
 
 app = Flask(__name__, template_folder='app/templates', static_folder='app/static')
 app.config['SECRET_KEY'] = 'your-secret-key-here'
+
+# Enable CORS for all routes
+CORS(app, resources={r"/*": {"origins": "*"}})
+
 socketio = SocketIO(app, cors_allowed_origins="*", max_http_buffer_size=10**8)
 
 # Store active users and their sessions
@@ -436,10 +441,17 @@ def handle_join(data):
                 'status': 'active'
             })
             
-            # Notify User A that User B has joined
+            # Notify both users about each other
             user_a_sid = session['participants']['A']
-            print(f'📢 Notifying User A ({user_a_sid}) that User B joined')
-            emit('user_joined', {'id': request.sid}, room=room, skip_sid=request.sid)
+            user_b_sid = request.sid
+            
+            # Tell User A that User B joined
+            print(f'📢 Notifying User A ({user_a_sid}) that User B ({user_b_sid}) joined')
+            emit('user_joined', {'id': user_b_sid}, to=user_a_sid)
+            
+            # Tell User B about User A (so User B can initiate the call)
+            print(f'📢 Notifying User B ({user_b_sid}) that User A ({user_a_sid}) exists')
+            emit('user_joined', {'id': user_a_sid}, to=user_b_sid)
         else:
             # Check if there's an active session (MVP: only 1 session at a time)
             active_sessions = session_manager.list_active_sessions()
@@ -472,26 +484,67 @@ def handle_join(data):
 
 @socketio.on('offer')
 def handle_offer(data):
-    print(f'Offer from {request.sid} to {data["target"]}')
-    emit('offer', {
-        'offer': data['offer'],
-        'sender': request.sid
-    }, to=data['target'])  # Use 'to' for direct socket messaging
+    target = data.get('target')
+    print(f'📞 Offer from {request.sid} to {target}')
+    print(f'   Offer type: {data.get("offer", {}).get("type", "unknown")}')
+    if target:
+        emit('offer', {
+            'offer': data['offer'],
+            'sender': request.sid
+        }, to=target)  # Use 'to' for direct socket messaging
+        print(f'   ✅ Offer sent to {target}')
+    else:
+        print(f'   ❌ No target specified!')
 
 @socketio.on('answer')
 def handle_answer(data):
-    print(f'Answer from {request.sid} to {data["target"]}')
-    emit('answer', {
-        'answer': data['answer'],
-        'sender': request.sid
-    }, to=data['target'])  # Use 'to' for direct socket messaging
+    target = data.get('target')
+    print(f'✅ Answer from {request.sid} to {target}')
+    print(f'   Answer type: {data.get("answer", {}).get("type", "unknown")}')
+    if target:
+        emit('answer', {
+            'answer': data['answer'],
+            'sender': request.sid
+        }, to=target)  # Use 'to' for direct socket messaging
+        print(f'   ✅ Answer sent to {target}')
+    else:
+        print(f'   ❌ No target specified!')
 
 @socketio.on('ice_candidate')
 def handle_ice_candidate(data):
-    emit('ice_candidate', {
-        'candidate': data['candidate'],
-        'sender': request.sid
-    }, to=data['target'])  # Use 'to' for direct socket messaging
+    target = data.get('target')
+    candidate = data.get('candidate')
+    print(f'🧊 ICE candidate from {request.sid} to {target}')
+    if target:
+        emit('ice_candidate', {
+            'candidate': candidate,
+            'sender': request.sid
+        }, to=target)  # Use 'to' for direct socket messaging
+    else:
+        print(f'   ❌ No target specified!')
+
+@socketio.on('request_peer_info')
+def handle_request_peer_info(data):
+    """User B requests info about User A when HeartLinkScene loads"""
+    session_id = data.get('session_id')
+    print(f'🔍 User {request.sid} requesting peer info for session {session_id}')
+    
+    try:
+        session = session_manager.load_session(session_id)
+        if session and session.get('participants'):
+            user_a_sid = session['participants'].get('A')
+            user_b_sid = session['participants'].get('B')
+            
+            # Tell User B about User A
+            if user_a_sid and user_b_sid == request.sid:
+                print(f'   ✅ Sending User A ({user_a_sid}) info to User B ({request.sid})')
+                emit('user_joined', {'id': user_a_sid}, to=request.sid)
+            else:
+                print(f'   ⚠️ User not found in session or not User B')
+        else:
+            print(f'   ❌ Session not found or no participants')
+    except Exception as e:
+        print(f'   ❌ Error: {e}')
 
 def is_meaningful_transcript(transcript, audio_size):
     """
