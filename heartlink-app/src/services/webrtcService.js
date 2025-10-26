@@ -108,8 +108,12 @@ class WebRTCService {
       }
       
       const audioOnlyStream = new MediaStream([audioTrack]);
-      this.mediaRecorder = new MediaRecorder(audioOnlyStream, { mimeType: 'audio/webm' });
-      
+      // Use reasonable bitrate for good STT accuracy
+      this.mediaRecorder = new MediaRecorder(audioOnlyStream, {
+        mimeType: 'audio/webm',
+        audioBitsPerSecond: 32000  // Increased for better STT accuracy
+      });
+
       this.mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           this.audioChunks.push(event.data);
@@ -119,6 +123,13 @@ class WebRTCService {
       this.mediaRecorder.onstop = () => {
         const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
         this.audioChunks = [];
+
+        // Skip small/silent chunks to reduce traffic
+        if (audioBlob.size < 2000) {
+          console.log('⏭️ Skipping small audio chunk');
+          if (this.isRecording) this.scheduleNextCapture();
+          return;
+        }
 
         // Convert to base64 and send via socket
         const reader = new FileReader();
@@ -134,29 +145,35 @@ class WebRTCService {
         };
 
         // Restart recording for continuous capture
-        if (this.isRecording && this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
-          this.mediaRecorder.start();
-          setTimeout(() => {
-            if (this.isRecording && this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-              this.mediaRecorder.stop();
-            }
-          }, 3000); // Capture 3-second chunks
+        if (this.isRecording) {
+          this.scheduleNextCapture();
         }
       };
 
       this.isRecording = true;
       this.mediaRecorder.start();
 
-      // Stop after 3 seconds to create chunks
+      // 2 seconds for better STT accuracy
       setTimeout(() => {
         if (this.isRecording && this.mediaRecorder && this.mediaRecorder.state === 'recording') {
           this.mediaRecorder.stop();
         }
-      }, 3000);
+      }, 2000);
 
       console.log('🎤 Audio capture started for STT');
     } catch (error) {
       console.error('❌ Error starting audio capture:', error);
+    }
+  }
+
+  scheduleNextCapture() {
+    if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
+      this.mediaRecorder.start();
+      setTimeout(() => {
+        if (this.isRecording && this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+          this.mediaRecorder.stop();
+        }
+      }, 2000);
     }
   }
 
@@ -168,26 +185,37 @@ class WebRTCService {
     console.log('🛑 Audio capture stopped');
   }
 
-  async toggleVideo() {
-    if (!this.localStream) return;
+  async enableVideo() {
+    if (!this.localStream) {
+      console.error('❌ No local stream available');
+      return false;
+    }
 
     const videoTrack = this.localStream.getVideoTracks()[0];
-    
+
     if (videoTrack) {
-      // Has video track, toggle it
-      this.isVideoEnabled = !videoTrack.enabled;
-      videoTrack.enabled = this.isVideoEnabled;
-      console.log('📹 Video toggled:', this.isVideoEnabled ? 'ON' : 'OFF');
-      return this.isVideoEnabled;
+      // Has video track, ensure it's enabled
+      if (!videoTrack.enabled) {
+        videoTrack.enabled = true;
+        console.log('📹 Video track re-enabled');
+      } else {
+        console.log('📹 Video already enabled');
+      }
+      this.isVideoEnabled = true;
+      return true;
     } else {
       // No video track, add one
       try {
+        console.log('📹 Requesting camera access...');
         const videoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         const newVideoTrack = videoStream.getVideoTracks()[0];
         this.localStream.addTrack(newVideoTrack);
 
+        console.log('📹 Video track added to local stream');
+
         // Add to peer connection if active and trigger renegotiation
         if (this.peerConnection) {
+          console.log('🔄 Adding video track to peer connection...');
           this.peerConnection.addTrack(newVideoTrack, this.localStream);
 
           // Renegotiate to send video to peer
@@ -196,17 +224,21 @@ class WebRTCService {
           await this.peerConnection.setLocalDescription(offer);
 
           // Send offer to peer via socket
-          if (this.socket && this.targetId) {
+          if (this.socket && this.remoteId) {
             this.socket.emit('offer', {
-              target: this.targetId,
+              target: this.remoteId,
               offer: offer
             });
-            console.log('📤 Sent renegotiation offer to peer');
+            console.log('📤 Sent renegotiation offer to:', this.remoteId);
+          } else {
+            console.error('❌ Cannot send renegotiation - remoteId:', this.remoteId, 'socket:', !!this.socket);
           }
+        } else {
+          console.warn('⚠️ No peer connection yet, video will be added when connection is established');
         }
 
         this.isVideoEnabled = true;
-        console.log('📹 Video enabled');
+        console.log('✅ Video enabled successfully');
 
         if (this.onLocalStream) {
           this.onLocalStream(this.localStream);
@@ -217,6 +249,26 @@ class WebRTCService {
         console.error('❌ Error enabling video:', error);
         throw error;
       }
+    }
+  }
+
+  async toggleVideo() {
+    if (!this.localStream) {
+      console.error('❌ No local stream available');
+      return false;
+    }
+
+    const videoTrack = this.localStream.getVideoTracks()[0];
+
+    if (videoTrack && videoTrack.enabled) {
+      // Video is currently ON, turn it OFF
+      videoTrack.enabled = false;
+      this.isVideoEnabled = false;
+      console.log('📹 Video disabled');
+      return false;
+    } else {
+      // Video is OFF or doesn't exist, turn it ON
+      return this.enableVideo();
     }
   }
 
@@ -240,25 +292,32 @@ class WebRTCService {
       console.log('   Track enabled:', track.enabled);
       console.log('   Track muted:', track.muted);
       console.log('   Track readyState:', track.readyState);
-      
+      console.log('   Track settings:', track.getSettings());
+
       // Listen for unmute event - track.muted is read-only and changes automatically
       track.addEventListener('unmute', () => {
-        console.log('🔊 Remote track unmuted!');
+        console.log(`🔊 Remote ${track.kind} track unmuted!`);
       });
-      
+
       track.addEventListener('mute', () => {
-        console.warn('🔇 Remote track muted!');
+        console.warn(`🔇 Remote ${track.kind} track muted!`);
       });
-      
+
+      track.addEventListener('ended', () => {
+        console.warn(`⚠️ Remote ${track.kind} track ended!`);
+      });
+
       this.remoteStream = event.streams[0];
       console.log('🎥 Remote stream tracks:', this.remoteStream.getTracks().map(t => `${t.kind}: enabled=${t.enabled}, muted=${t.muted}, readyState=${t.readyState}`));
-      
+
       // Note: track.muted is READ-ONLY and reflects whether data is flowing
       // If it stays muted, the remote peer isn't sending audio data
       if (track.muted) {
-        console.warn('⚠️ Remote track is muted - waiting for remote peer to send audio...');
+        console.warn(`⚠️ Remote ${track.kind} track is muted - waiting for remote peer to send data...`);
+      } else {
+        console.log(`✅ Remote ${track.kind} track is flowing with data`);
       }
-      
+
       if (this.onRemoteStream) {
         this.onRemoteStream(this.remoteStream);
       }
@@ -308,7 +367,13 @@ class WebRTCService {
     // Add local tracks to peer connection
     this.localStream.getTracks().forEach(track => {
       const sender = this.peerConnection.addTrack(track, this.localStream);
-      console.log('   Added track to peer connection:', track.kind, 'enabled:', track.enabled);
+      console.log('   Added track to peer connection:', track.kind, 'enabled:', track.enabled, 'muted:', track.muted);
+      console.log('   Track settings:', track.getSettings());
+
+      // Verify track is live
+      if (track.readyState !== 'live') {
+        console.error('❌ Track is not live! ReadyState:', track.readyState);
+      }
     });
 
     try {
@@ -326,56 +391,83 @@ class WebRTCService {
   }
 
   async handleOffer(offer) {
-    console.log('📞 Handling incoming call...');
+    console.log('📞 Handling incoming offer...');
     console.log('   My socket ID:', this.socket.id);
     console.log('   Remote ID (sender):', this.remoteId);
     console.log('   Offer type:', offer.type);
-    
-    this.createPeerConnection();
 
-    // Add local tracks
-    if (this.localStream) {
-      console.log('   Adding local tracks to peer connection...');
-      this.localStream.getTracks().forEach(track => {
-        this.peerConnection.addTrack(track, this.localStream);
-        console.log('   Added track:', track.kind, 'enabled:', track.enabled);
-      });
+    // Check if this is a renegotiation (peer connection already exists)
+    const isRenegotiation = this.peerConnection && this.peerConnection.connectionState === 'connected';
+
+    if (isRenegotiation) {
+      console.log('🔄 This is a renegotiation (connection already established)');
+
+      // Check for glare condition (both sides sent offers simultaneously)
+      if (this.peerConnection.signalingState === 'have-local-offer') {
+        console.warn('⚠️ Glare detected: both peers sent offers simultaneously');
+        // Polite peer should rollback (use socket ID comparison to decide)
+        if (this.socket.id < this.remoteId) {
+          console.log('🔄 Rolling back local offer (polite peer)');
+          await this.peerConnection.setLocalDescription({type: 'rollback'});
+        } else {
+          console.log('🚫 Ignoring incoming offer (impolite peer)');
+          return;
+        }
+      }
     } else {
-      console.warn('⚠️ No local stream available when handling offer!');
+      console.log('📞 This is initial call setup');
+      this.createPeerConnection();
+
+      // Add local tracks for initial setup
+      if (this.localStream) {
+        console.log('   Adding local tracks to peer connection...');
+        this.localStream.getTracks().forEach(track => {
+          this.peerConnection.addTrack(track, this.localStream);
+          console.log('   Added track:', track.kind, 'enabled:', track.enabled);
+        });
+      } else {
+        console.warn('⚠️ No local stream available when handling offer!');
+      }
     }
 
     try {
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
       console.log('   Remote description set');
-      
+
       const answer = await this.peerConnection.createAnswer();
       console.log('   Created answer:', answer.type);
-      
+
       await this.peerConnection.setLocalDescription(answer);
       console.log('   Local description set');
-      
+
       this.socket.emit('answer', {
         answer: answer,
         target: this.remoteId
       });
-      console.log('✅ Call accepted - answer sent to:', this.remoteId);
+      console.log('✅ Answer sent to:', this.remoteId, isRenegotiation ? '(renegotiation)' : '(initial)');
     } catch (error) {
       console.error('❌ Error handling offer:', error);
+      console.error('   Signaling state:', this.peerConnection?.signalingState);
     }
   }
 
   async handleAnswer(answer) {
     try {
-      // Check if we already have a remote description
-      if (this.peerConnection.currentRemoteDescription) {
-        console.warn('⚠️ Remote description already set, skipping duplicate answer');
-        return;
+      // For renegotiation, we need to accept the answer even if remote description exists
+      const hasRemoteDesc = !!this.peerConnection.currentRemoteDescription;
+
+      if (hasRemoteDesc) {
+        console.log('🔄 Processing answer (renegotiation)');
+      } else {
+        console.log('📞 Processing answer (initial connection)');
       }
-      
+
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
       console.log('✅ Answer processed successfully');
     } catch (error) {
       console.error('❌ Error handling answer:', error);
+      console.error('   Answer type:', answer.type);
+      console.error('   Current signaling state:', this.peerConnection.signalingState);
     }
   }
 

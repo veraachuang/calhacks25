@@ -32,7 +32,9 @@ def stream_asr(audio_bytes: bytes) -> str:
     try:
         # Try with multipart/form-data approach
         files = {'audio': ('audio.wav', audio_bytes, 'audio/wav')}
-        response = session.post(url, files=files, timeout=30)
+        # Force English language for STT
+        data = {'language': 'en'}
+        response = session.post(url, files=files, data=data, timeout=30)
         response.raise_for_status()
 
         result = response.json()

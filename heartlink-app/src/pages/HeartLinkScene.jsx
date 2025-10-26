@@ -24,6 +24,7 @@ export default function HeartLinkScene() {
   const scene2Ref = useRef(null);
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
+  const currentAudioRef = useRef(null); // Track currently playing AI audio
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -57,6 +58,39 @@ export default function HeartLinkScene() {
 
   const getCurrentColor = (colorId) => flameColors[colorId] || 0xff4500;
 
+  // Helper function to play AI audio safely (prevent overlaps)
+  const playAIAudio = (audioData) => {
+    try {
+      // Stop currently playing audio if any
+      if (currentAudioRef.current && !currentAudioRef.current.paused) {
+        console.log('⏹️ Stopping previous AI audio');
+        currentAudioRef.current.pause();
+        currentAudioRef.current.currentTime = 0;
+      }
+
+      // Create and play new audio
+      const audio = new Audio(audioData);
+      audio.volume = 1.0;
+      currentAudioRef.current = audio;
+
+      audio.play().then(() => {
+        console.log('✅ Playing AI audio');
+      }).catch(err => {
+        console.error('❌ Failed to play AI audio:', err);
+      });
+
+      // Clean up reference when done
+      audio.onended = () => {
+        console.log('🏁 AI audio finished');
+        if (currentAudioRef.current === audio) {
+          currentAudioRef.current = null;
+        }
+      };
+    } catch (err) {
+      console.error('❌ Error creating AI audio:', err);
+    }
+  };
+
   // Initialize WebRTC and Socket.IO
   useEffect(() => {
     const initConnection = async () => {
@@ -88,26 +122,54 @@ export default function HeartLinkScene() {
 
         webrtcService.onRemoteStream = (stream) => {
           console.log('🎥 Remote stream received:', stream.getTracks().map(t => `${t.kind}: ${t.enabled}`));
+
+          // Log audio track details
+          const audioTracks = stream.getAudioTracks();
+          if (audioTracks.length > 0) {
+            console.log('🔊 Audio track details:', {
+              enabled: audioTracks[0].enabled,
+              muted: audioTracks[0].muted,
+              readyState: audioTracks[0].readyState,
+              settings: audioTracks[0].getSettings()
+            });
+          } else {
+            console.warn('⚠️ No audio tracks in remote stream!');
+          }
+
           if (remoteVideoRef.current) {
             const videoEl = remoteVideoRef.current;
             videoEl.srcObject = stream;
-            
-            // Ensure volume is up and not muted
-            videoEl.volume = 1.0;
+
+            // CRITICAL: Ensure not muted for audio playback
             videoEl.muted = false;
-            
+            videoEl.volume = 1.0;
+
             console.log('🔊 Video element settings:', {
               volume: videoEl.volume,
               muted: videoEl.muted,
-              paused: videoEl.paused
+              paused: videoEl.paused,
+              hasAudioTracks: stream.getAudioTracks().length > 0
             });
-            
+
             // Explicitly play the video element to ensure audio plays
             videoEl.play().then(() => {
-              console.log('✅ Remote video element updated and playing');
-              console.log('   Final state - volume:', videoEl.volume, 'muted:', videoEl.muted);
+              console.log('✅ Remote video element playing');
+              console.log('   Volume:', videoEl.volume, 'Muted:', videoEl.muted);
+
+              // Double-check audio is flowing
+              setTimeout(() => {
+                const audioTracks = stream.getAudioTracks();
+                if (audioTracks.length > 0) {
+                  console.log('🔊 Audio track status after 1s:', {
+                    enabled: audioTracks[0].enabled,
+                    muted: audioTracks[0].muted,
+                    readyState: audioTracks[0].readyState
+                  });
+                }
+              }, 1000);
             }).catch(err => {
-              console.warn('⚠️ Autoplay prevented, user interaction may be needed:', err);
+              console.error('❌ Failed to play remote stream:', err);
+              console.log('⚠️ User interaction may be needed to enable audio');
             });
           } else {
             console.log('⚠️ Remote video ref not ready, will retry...');
@@ -115,6 +177,8 @@ export default function HeartLinkScene() {
             setTimeout(() => {
               if (remoteVideoRef.current) {
                 remoteVideoRef.current.srcObject = stream;
+                remoteVideoRef.current.muted = false;
+                remoteVideoRef.current.volume = 1.0;
                 remoteVideoRef.current.play().catch(err => {
                   console.warn('⚠️ Autoplay prevented (retry):', err);
                 });
@@ -131,7 +195,7 @@ export default function HeartLinkScene() {
           console.log('   My role:', userRole);
           console.log('   Should I call?', userRole === 'B' ? 'YES (I am User B)' : 'NO (I am User A, waiting)');
           setPeerConnected(true);
-          
+
           // Only User B (joiner) initiates the call to avoid both peers calling
           if (userRole === 'B') {
             console.log('🔄 User B initiating call...');
@@ -158,11 +222,27 @@ export default function HeartLinkScene() {
           console.log('📝 Transcript:', data);
           // Use speaker_name from backend if available, otherwise fall back to user_id comparison
           const speakerName = data.speaker_name || (data.user_id === socket.id ? avatarName : remoteUserName);
-          setTranscripts(prev => [...prev, {
-            speaker: speakerName,
-            text: data.text,
-            type: 'user'
-          }]);
+
+          // Add transcript with deduplication check
+          setTranscripts(prev => {
+            // Check if this exact transcript was just added (within last 2 seconds)
+            const isDuplicate = prev.slice(-3).some(t =>
+              t.speaker === speakerName &&
+              t.text === data.text &&
+              t.type === 'user'
+            );
+
+            if (isDuplicate) {
+              console.log('⏭️ Skipping duplicate transcript');
+              return prev;
+            }
+
+            return [...prev, {
+              speaker: speakerName,
+              text: data.text,
+              type: 'user'
+            }];
+          });
         });
 
         // Listen for AI interjections (old flow - no audio)
@@ -175,7 +255,7 @@ export default function HeartLinkScene() {
           }]);
         });
 
-        // Listen for agent responses (new flow - with audio)
+        // Listen for agent responses (new flow - text comes first)
         socket.on('agent_response', (data) => {
           console.log('🤖 Agent:', data.response);
           setTranscripts(prev => [...prev, {
@@ -184,20 +264,19 @@ export default function HeartLinkScene() {
             type: 'ai'
           }]);
 
-          // Play audio if available
+          // Play audio if available (for backward compatibility)
           if (data.audio) {
-            try {
-              const audioData = `data:audio/wav;base64,${data.audio}`;
-              const audio = new Audio(audioData);
-              audio.volume = 1.0;
-              audio.play().then(() => {
-                console.log('✅ Playing AI audio');
-              }).catch(err => {
-                console.error('❌ Failed to play AI audio:', err);
-              });
-            } catch (err) {
-              console.error('❌ Error creating AI audio:', err);
-            }
+            const audioData = `data:audio/wav;base64,${data.audio}`;
+            playAIAudio(audioData);
+          }
+        });
+
+        // Listen for agent audio (separate from text for faster response)
+        socket.on('agent_audio', (data) => {
+          console.log('🔊 Agent audio received');
+          if (data.audio) {
+            const audioData = `data:audio/wav;base64,${data.audio}`;
+            playAIAudio(audioData);
           }
         });
 
@@ -405,7 +484,7 @@ export default function HeartLinkScene() {
               : "bg-white/10 text-gray-400 border-white/20 cursor-not-allowed"
           }`}
         >
-          {isVideoEnabled ? "📹 Video On" : "💞 Match"}
+          {isVideoEnabled ? "📹 Hide Camera" : "💞 Match"}
         </button>
       </div>
 
@@ -433,16 +512,19 @@ export default function HeartLinkScene() {
           {/* Canvas flame (shown when video disabled) */}
           {!isVideoEnabled && <canvas ref={flame2Ref} className="w-[200px] h-[200px]" />}
           
-          {/* Video element (always in DOM for audio, but hidden when video disabled) */}
-          <video 
-            ref={remoteVideoRef} 
-            autoPlay 
-            playsInline 
-            className={`rounded-2xl border-2 border-white/20 shadow-xl pointer-events-auto ${
-              isVideoEnabled 
-                ? "w-[300px] h-[225px]" 
-                : "hidden"
-            }`}
+          {/* Video element (always in DOM for audio, must not be muted!) */}
+          <video
+            ref={remoteVideoRef}
+            autoPlay
+            playsInline
+            muted={false}
+            style={{
+              width: '300px',
+              height: '225px',
+              visibility: isVideoEnabled ? 'visible' : 'hidden',
+              position: isVideoEnabled ? 'relative' : 'absolute'
+            }}
+            className="rounded-2xl border-2 border-white/20 shadow-xl pointer-events-auto"
           />
           <p className="text-white/80 font-semibold mt-3">{remoteUserName}</p>
         </div>
@@ -453,7 +535,7 @@ export default function HeartLinkScene() {
         className="glass-box absolute bottom-16 left-1/2 -translate-x-1/2 w-3/5 p-6 overflow-y-auto"
         style={{ maxWidth: "700px", maxHeight: "300px" }}
       >
-        <h2 className="text-pink-400 font-semibold text-xl mb-3 text-center">HeartLink AI Mediator 🤍</h2>
+        <h2 className="text-pink-400 font-semibold text-xl mb-3 text-center">Flame 🤍</h2>
         <div className="text-gray-200 text-base leading-relaxed space-y-2 text-left">
           {transcripts.length === 0 ? (
             <p className="text-center text-gray-400 italic">Start talking to see transcripts...</p>
