@@ -1,7 +1,5 @@
-import { BACKEND_URL } from '../config';
-
-// Backend URL is now configured via config.js
-// This allows for cross-device connectivity on the same network
+// Use environment variable for backend URL (ngrok tunnel) or fall back to localhost
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || `https://${window.location.hostname}:8765`;
 
 class ApiService {
   async updateProfile(sessionId, userId, profileData) {

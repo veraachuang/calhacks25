@@ -227,6 +227,13 @@ export default function ProfilePage() {
             
             resolve(data);
           });
+          
+          // Handle session full error (MVP: 2 users max)
+          socket.once('session_error', (data) => {
+            clearTimeout(timeout);
+            console.error('❌ Session error:', data);
+            reject(new Error(data.message || 'Session error'));
+          });
         });
         
         // Navigate to HeartLink scene
@@ -247,7 +254,9 @@ export default function ProfilePage() {
         setIsConnecting(false);
         
         // More specific error messages
-        if (error.message.includes('timeout') || error.message.includes('Timeout')) {
+        if (error.message.includes('full') || error.message.includes('2 users')) {
+          alert('⚠️ Matchmaking room is full!\n\nThe MVP currently supports 2 users max.\n\nPlease wait for the current session to end or try again later.');
+        } else if (error.message.includes('timeout') || error.message.includes('Timeout')) {
           alert('Connection timeout! Check:\n1. Backend server is running\n2. You accepted the HTTPS certificate at https://' + window.location.hostname + ':8765\n3. Your WiFi connection');
         } else if (error.message.includes('ECONNREFUSED') || error.message.includes('refused')) {
           alert('Backend server is not running! Start it with: python app.py');

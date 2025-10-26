@@ -83,11 +83,41 @@ export default function HeartLinkScene() {
 
         // Listen for user joined (peer available)
         socket.on('user_joined', (data) => {
-          console.log('👤 Peer joined, starting call...');
+          console.log('👤 Peer joined:', data.id);
           setPeerConnected(true);
-          // Auto-start call when peer joins
-          setTimeout(() => webrtcService.startCall(), 1000);
+          
+          // Only User B (joiner) initiates the call to avoid both peers calling
+          if (userRole === 'B') {
+            console.log('🔄 User B initiating call...');
+            setTimeout(() => webrtcService.startCall(), 1000);
+          } else {
+            console.log('👤 User A waiting for call from User B...');
+          }
         });
+
+        // Re-join the matchmaking room to trigger user_joined events
+        // This ensures we receive events for users already in the room
+        console.log('🔄 Re-joining matchmaking room to sync with peers...');
+        socketService.joinRoom('matchmaking');
+
+        // Check if peer is already in the session (for User B joining after User A)
+        if (sessionId && userRole === 'B') {
+          try {
+            const session = await apiService.getSession(sessionId);
+            if (session && session.participants && session.participants.A) {
+              console.log('👤 Peer (User A) already in session, initiating call...');
+              // Set the remote ID from the session
+              if (webrtcService.socket) {
+                webrtcService.remoteId = session.participants.A;
+              }
+              setPeerConnected(true);
+              // Give time for the peer to set up their listeners
+              setTimeout(() => webrtcService.startCall(), 1500);
+            }
+          } catch (error) {
+            console.error('Failed to check session state:', error);
+          }
+        }
 
         // Listen for transcript updates
         socket.on('transcript_update', (data) => {
