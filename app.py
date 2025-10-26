@@ -3,6 +3,7 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 from app import routes
 from app import session_manager
 from app import profile_manager
+from app import agent_manager
 import sys
 import os
 import base64
@@ -217,6 +218,60 @@ def api_list_profiles():
     profiles = profile_manager.list_all_profiles()
     return jsonify(profiles)
 
+# ========== AGENT API ENDPOINTS ==========
+
+@app.route('/api/agent/trigger', methods=['POST'])
+def api_trigger_agent():
+    """Manually trigger Janitor AI agent for a session"""
+    data = request.get_json()
+    session_id = data.get('session_id')
+    
+    if not session_id:
+        return jsonify({"error": "Missing session_id"}), 400
+    
+    success, response_text, error = agent_manager.trigger_agent(session_id)
+    
+    if success:
+        return jsonify({
+            "success": True,
+            "response": response_text,
+            "used_fallback": error is not None,
+            "fallback_reason": error
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "error": error
+        }), 500
+
+@app.route('/api/agent/stats/<session_id>', methods=['GET'])
+def api_agent_stats(session_id):
+    """Get agent statistics for a session"""
+    stats = agent_manager.get_agent_stats(session_id)
+    return jsonify(stats)
+
+@app.route('/api/agent/tts', methods=['POST'])
+def api_agent_tts():
+    """Convert agent text to speech"""
+    data = request.get_json()
+    text = data.get('text')
+    
+    if not text:
+        return jsonify({"error": "Missing text"}), 400
+    
+    try:
+        # Generate audio using Fish Audio TTS
+        audio_bytes = stream_tts(text)
+        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+        
+        return jsonify({
+            "success": True,
+            "audio": audio_base64,
+            "format": "wav"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @socketio.on('connect')
 def handle_connect():
     print(f'Client connected: {request.sid}')
@@ -376,7 +431,7 @@ def handle_audio_chunk(data):
             'timestamp': time.time()
         })
 
-        # Emit transcript back to all users in room
+         # Emit transcript back to all users in room
         emit('transcript_update', {
             'user_id': user_id,
             'text': transcript,
@@ -385,11 +440,10 @@ def handle_audio_chunk(data):
 
         print(f"Transcribed from {user_id}: {transcript}")
 
-        # Check if AI should interject
-        should_interject = check_if_ai_should_interject(room)
-        if should_interject:
-            # Trigger AI interjection asynchronously
-            socketio.start_background_task(ai_interject, room)
+        # Check if Agent should respond (using new agent_manager)
+        if session_id and agent_manager.should_trigger_agent(session_id):
+            # Trigger agent asynchronously
+            socketio.start_background_task(trigger_agent_background, session_id, room)
 
     except Exception as e:
         print(f"Error processing audio chunk: {e}")
@@ -609,70 +663,72 @@ def ai_interject(room):
     except Exception as e:
         print(f"Error in AI interjection: {e}")
 
-@socketio.on('trigger_ai')
-def handle_trigger_ai(data):
+def trigger_agent_background(session_id: str, room: str):
     """
-    Manual trigger to send transcript buffer to JanitorAI.
+    Background task to trigger Janitor AI agent
+    Uses new agent_manager for proper orchestration
     """
     try:
+        success, response_text, error = agent_manager.trigger_agent(session_id)
+        
+        if success:
+            # Generate TTS audio for agent response
+            try:
+                audio_bytes = stream_tts(response_text)
+                audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+                
+                socketio.emit('agent_response', {
+                    'success': True,
+                    'response': response_text,
+                    'audio': audio_base64,
+                    'format': 'wav',
+                    'used_fallback': error is not None
+                }, room=room)
+                
+                print(f"Agent responded in session {session_id}: {response_text[:100]}...")
+                
+            except Exception as tts_error:
+                # Send text even if TTS fails
+                socketio.emit('agent_response', {
+                    'success': True,
+                    'response': response_text,
+                    'audio': None,
+                    'tts_error': str(tts_error),
+                    'used_fallback': error is not None
+                }, room=room)
+        else:
+            print(f"Agent failed for session {session_id}: {error}")
+            
+    except Exception as e:
+        print(f"Error in agent background task: {e}")
+
+@socketio.on('trigger_agent')
+def handle_trigger_agent(data):
+    """
+    Manual trigger for Janitor AI agent (updated to use agent_manager)
+    """
+    try:
+        session_id = data.get('session_id')
         user_id = request.sid
         room = active_users.get(user_id, 'default')
-
-        # Get transcript buffer
-        buffer = transcript_buffers.get(room, [])
-
-        if not buffer:
-            emit('ai_response', {'error': 'No transcripts in buffer'})
+        
+        if not session_id:
+            # Try to get session from user
+            session_id = user_sessions.get(user_id)
+        
+        if not session_id:
+            emit('agent_response', {'error': 'No session found'})
             return
-
-        # Combine all transcripts into context
-        context = "\n".join([
-            f"User: {t['text']}"
-            for t in buffer[-AI_CONTEXT_WINDOW:]
-        ])
-
-        # Get custom prompt or use default
-        user_prompt = data.get('prompt', 'Provide insights or suggestions based on this conversation.')
-        system_prompt = data.get('system_prompt', 'You are a helpful AI assistant analyzing a video call conversation.')
-
-        # Prepare JanitorAI request
-        payload = {
-            "model": "ignored",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Conversation:\n{context}\n\n{user_prompt}"}
-            ],
-            "max_tokens": data.get('max_tokens', 500)
-        }
-
-        headers = {
-            "Authorization": f"Bearer {JANITOR_AI_KEY}",
-            "Content-Type": "application/json"
-        }
-
-        # Call JanitorAI
-        response = requests.post(JANITOR_AI_URL, headers=headers, json=payload, timeout=30, stream=False)
-        response.raise_for_status()
-
-        # Parse streaming response
-        ai_message = parse_streaming_response(response.text)
-
-        if not ai_message:
-            emit('ai_response', {'error': 'Failed to parse AI response'})
-            return
-
-        # Emit AI response to room
-        emit('ai_response', {
-            'success': True,
-            'response': ai_message,
-            'context_used': len(buffer)
-        }, room=room)
-
-        print(f"AI Response sent to room {room}: {ai_message[:100]}...")
-
+        
+        # Trigger agent using background task
+        socketio.start_background_task(trigger_agent_background, session_id, room)
+        
+        # Immediately acknowledge
+        emit('agent_triggered', {'session_id': session_id})
+        
     except Exception as e:
-        print(f"Error triggering AI: {e}")
-        emit('ai_response', {'error': str(e)})
+        print(f"Error triggering agent: {e}")
+        emit('agent_response', {'error': str(e)})
 
 @socketio.on('transcript_message')
 def handle_transcript_message(data):
