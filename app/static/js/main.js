@@ -21,6 +21,10 @@ let audioChunks = [];
 let isRecording = false;
 let sttInterval;
 
+// Audio playback queue to prevent overlapping
+let audioQueue = [];
+let isPlayingAudio = false;
+
 // DOM elements
 const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
@@ -91,8 +95,15 @@ function initializeSocket() {
     socket.on('ai_interjection', (data) => {
         console.log('AI interjected:', data.message);
         displayAIInterjection(data.message);
-        // Optionally speak the AI response using TTS
-        speakAIResponse(data.message);
+
+        // Use the audio if provided, otherwise fetch TTS
+        if (data.audio) {
+            // Audio already provided as base64
+            playAudioFromBase64(data.audio);
+        } else {
+            // Fallback to fetching TTS
+            speakAIResponse(data.message);
+        }
     });
 
     socket.on('stt_error', (data) => {
@@ -389,37 +400,128 @@ function displayAIInterjection(message) {
     }
 }
 
-// Speak AI response using Fish Audio TTS
-async function speakAIResponse(text) {
+// Play audio directly from base64 (used when audio is provided with response)
+function playAudioFromBase64(audioBase64) {
     try {
-        const response = await fetch('/api/tts', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ text: text })
-        });
+        // Decode base64 audio
+        const audioData = atob(audioBase64);
+        const arrayBuffer = new ArrayBuffer(audioData.length);
+        const view = new Uint8Array(arrayBuffer);
+        for (let i = 0; i < audioData.length; i++) {
+            view[i] = audioData.charCodeAt(i);
+        }
 
-        const data = await response.json();
+        const audioBlob = new Blob([arrayBuffer], { type: 'audio/wav' });
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
 
-        if (data.audio) {
-            // Decode base64 audio and play it
-            const audioData = atob(data.audio);
-            const arrayBuffer = new ArrayBuffer(audioData.length);
-            const view = new Uint8Array(arrayBuffer);
-            for (let i = 0; i < audioData.length; i++) {
-                view[i] = audioData.charCodeAt(i);
-            }
+        // Add to queue
+        audioQueue.push({ type: 'audio', url: audioUrl, audio: audio });
+        console.log(`Added audio to queue (queue length: ${audioQueue.length})`);
 
-            const audioBlob = new Blob([arrayBuffer], { type: 'audio/wav' });
-            const audioUrl = URL.createObjectURL(audioBlob);
-            const audio = new Audio(audioUrl);
-
-            audio.play();
-            console.log('Playing AI response audio');
+        // Start processing queue if not already playing
+        if (!isPlayingAudio) {
+            processAudioQueue();
         }
     } catch (error) {
-        console.error('Error playing AI response:', error);
+        console.error('Error playing audio from base64:', error);
+    }
+}
+
+// Speak AI response using Fish Audio TTS
+async function speakAIResponse(text) {
+    // Add to queue instead of playing immediately
+    audioQueue.push({ type: 'text', text: text });
+    console.log(`Added AI response to queue (queue length: ${audioQueue.length})`);
+
+    // Start processing queue if not already playing
+    if (!isPlayingAudio) {
+        processAudioQueue();
+    }
+}
+
+// Process audio queue one at a time
+async function processAudioQueue() {
+    if (audioQueue.length === 0) {
+        isPlayingAudio = false;
+        return;
+    }
+
+    isPlayingAudio = true;
+    const item = audioQueue.shift(); // Get next item from queue
+
+    try {
+        // Check if item is pre-rendered audio or text that needs TTS
+        if (item.type === 'audio') {
+            // Pre-rendered audio - just play it
+            const audio = item.audio;
+            const audioUrl = item.url;
+
+            audio.onended = () => {
+                console.log('Audio finished playing');
+                URL.revokeObjectURL(audioUrl); // Clean up
+                processAudioQueue(); // Process next item in queue
+            };
+
+            audio.onerror = (error) => {
+                console.error('Error playing audio:', error);
+                URL.revokeObjectURL(audioUrl); // Clean up
+                processAudioQueue(); // Continue with next item even if error
+            };
+
+            await audio.play();
+            console.log('Playing pre-rendered audio');
+
+        } else if (item.type === 'text') {
+            // Text that needs TTS conversion
+            const text = item.text;
+
+            const response = await fetch('/api/tts', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ text: text })
+            });
+
+            const data = await response.json();
+
+            if (data.audio) {
+                // Decode base64 audio and play it
+                const audioData = atob(data.audio);
+                const arrayBuffer = new ArrayBuffer(audioData.length);
+                const view = new Uint8Array(arrayBuffer);
+                for (let i = 0; i < audioData.length; i++) {
+                    view[i] = audioData.charCodeAt(i);
+                }
+
+                const audioBlob = new Blob([arrayBuffer], { type: 'audio/wav' });
+                const audioUrl = URL.createObjectURL(audioBlob);
+                const audio = new Audio(audioUrl);
+
+                // Wait for audio to finish before processing next item
+                audio.onended = () => {
+                    console.log('Audio finished playing');
+                    URL.revokeObjectURL(audioUrl); // Clean up
+                    processAudioQueue(); // Process next item in queue
+                };
+
+                audio.onerror = (error) => {
+                    console.error('Error playing audio:', error);
+                    URL.revokeObjectURL(audioUrl); // Clean up
+                    processAudioQueue(); // Continue with next item even if error
+                };
+
+                await audio.play();
+                console.log('Playing TTS audio');
+            } else {
+                // No audio data, continue with next item
+                processAudioQueue();
+            }
+        }
+    } catch (error) {
+        console.error('Error processing audio queue:', error);
+        processAudioQueue(); // Continue with next item even if error
     }
 }
 

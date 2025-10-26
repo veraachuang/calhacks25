@@ -132,14 +132,19 @@ def build_agent_prompt(session_id: str) -> Optional[Dict]:
         if not session:
             print(f"Session {session_id} not found")
             return None
-        
+
+        # Check if session is active (both users have joined)
+        if session.get('status') != 'active':
+            print(f"Session {session_id} is not active yet (status: {session.get('status')})")
+            return None
+
         # Load profiles
         profiles = profile_manager.get_both_profiles(session_id)
         profile_a = profiles.get('A')
         profile_b = profiles.get('B')
-        
+
         if not profile_a or not profile_b:
-            print(f"Profiles not found for session {session_id}")
+            print(f"Profiles not found for session {session_id} (session may not be fully initialized)")
             return None
         
         # Build profile summary

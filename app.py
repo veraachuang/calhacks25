@@ -22,6 +22,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", max_http_buffer_size=10**8)
 # Store active users and their sessions
 active_users = {}  # socket_id -> user_info
 user_sessions = {}  # socket_id -> session_id
+room_to_session = {}  # room -> session_id (to handle room/session mapping)
 
 # Store transcript buffers per user/room
 transcript_buffers = {}
@@ -31,6 +32,9 @@ last_ai_interjection = {}
 
 # Store last audio activity time per room (for silence detection)
 last_audio_activity = {}
+
+# Store interjection locks per room (to prevent overlapping AI responses)
+interjection_locks = {}
 
 # JanitorAI configuration
 JANITOR_AI_URL = "https://janitorai.com/hackathon/completions"
@@ -370,39 +374,58 @@ def handle_join(data):
     join_room(room)
     active_users[request.sid] = room
     print(f'User {request.sid} joined room {room}')
-    
+
     # Create or join a session
     try:
-        # Check if there's a waiting session
-        waiting_session = session_manager.get_waiting_session()
-        
-        if waiting_session:
-            # Join existing session
-            session = session_manager.join_session(waiting_session['session_id'], request.sid)
-            user_sessions[request.sid] = session['session_id']
-            print(f'User {request.sid} joined session {session["session_id"]}')
-            
-            # Attach profiles when session becomes active
-            profile_manager.attach_profiles_to_session(session['session_id'])
-            
-            emit('session_info', {
-                'session_id': session['session_id'],
-                'role': 'B',
-                'status': 'active'
-            })
+        # First check if this room already has a session mapped to it
+        if room in room_to_session:
+            # Room has an existing session - join it
+            existing_session_id = room_to_session[room]
+            existing_session = session_manager.load_session(existing_session_id)
+
+            if existing_session and existing_session.get('status') == 'waiting':
+                # Join the existing waiting session
+                session = session_manager.join_session(existing_session_id, request.sid)
+                session_id = session['session_id']
+                user_sessions[request.sid] = session_id
+                print(f'User {request.sid} joined existing session {session_id} for room {room}')
+
+                # Attach profiles when session becomes active
+                profile_manager.attach_profiles_to_session(session_id)
+
+                emit('session_info', {
+                    'session_id': session_id,
+                    'role': 'B',
+                    'status': 'active'
+                })
+            else:
+                # Session exists but is not waiting (already active or ended)
+                # Create a new session for this room
+                session = session_manager.create_session(request.sid)
+                session_id = session['session_id']
+                user_sessions[request.sid] = session_id
+                room_to_session[room] = session_id
+                print(f'User {request.sid} created new session {session_id} for room {room} (previous session not waiting)')
+                emit('session_info', {
+                    'session_id': session_id,
+                    'role': 'A',
+                    'status': 'waiting'
+                })
         else:
-            # Create new session
-            session = session_manager.create_session(request.sid, session_id=room)
-            user_sessions[request.sid] = session['session_id']
-            print(f'User {request.sid} created session {session["session_id"]}')
+            # Room doesn't have a session yet - create one
+            session = session_manager.create_session(request.sid)
+            session_id = session['session_id']
+            user_sessions[request.sid] = session_id
+            room_to_session[room] = session_id
+            print(f'User {request.sid} created session {session_id} for room {room}')
             emit('session_info', {
-                'session_id': session['session_id'],
+                'session_id': session_id,
                 'role': 'A',
                 'status': 'waiting'
             })
     except Exception as e:
         print(f'Error managing session: {e}')
-    
+
     emit('user_joined', {'id': request.sid}, room=room, skip_sid=request.sid)
 
 @socketio.on('offer')
@@ -455,8 +478,18 @@ def handle_audio_chunk(data):
     """
     try:
         user_id = request.sid
-        room = active_users.get(user_id, 'default')
+        room = active_users.get(user_id)
         session_id = user_sessions.get(user_id)
+
+        # Check if user has joined a room
+        if not room:
+            print(f"User {user_id} sending audio but hasn't joined a room yet")
+            return
+
+        # Check if user has a session
+        if not session_id:
+            print(f"User {user_id} in room {room} but no session assigned yet")
+            return
 
         # Decode base64 audio data
         audio_data = base64.b64decode(data['audio'])
@@ -491,17 +524,7 @@ def handle_audio_chunk(data):
             except Exception as e:
                 print(f"Error adding to session manager: {e}")
 
-        # Also maintain room buffer for AI interjection logic
-        if room not in transcript_buffers:
-            transcript_buffers[room] = []
-
-        transcript_buffers[room].append({
-            'user_id': user_id,
-            'text': transcript,
-            'timestamp': time.time()
-        })
-
-         # Emit transcript back to all users in room
+        # Emit transcript back to all users in room
         emit('transcript_update', {
             'user_id': user_id,
             'text': transcript,
@@ -510,26 +533,39 @@ def handle_audio_chunk(data):
 
         print(f"Transcribed from {user_id}: {transcript}")
 
-        # Update last audio activity timestamp for this room
-        last_audio_activity[room] = time.time()
+        # Use session_id for AI state tracking
+        tracking_id = session_id
 
-        # Check if AI should interject using heuristics
-        if check_if_ai_should_interject(room):
+        # Also maintain buffer for AI interjection logic (now using session_id)
+        if tracking_id not in transcript_buffers:
+            transcript_buffers[tracking_id] = []
+
+        transcript_buffers[tracking_id].append({
+            'user_id': user_id,
+            'text': transcript,
+            'timestamp': time.time()
+        })
+
+        # Update last audio activity timestamp using session_id
+        last_audio_activity[tracking_id] = time.time()
+
+        # Check if AI should interject using heuristics (pass session_id)
+        if check_if_ai_should_interject(tracking_id):
             # Get recent context for Claude decision
-            buffer = transcript_buffers.get(room, [])
+            buffer = transcript_buffers.get(tracking_id, [])
             recent_context = buffer[-AI_CONTEXT_WINDOW:]
             context = "\n".join([f"User: {t['text']}" for t in recent_context])
 
             # Check for silence (3+ seconds since last audio)
-            time_since_last_audio = time.time() - last_audio_activity.get(room, time.time())
+            time_since_last_audio = time.time() - last_audio_activity.get(tracking_id, time.time())
             silence_detected = time_since_last_audio >= SILENCE_THRESHOLD
 
             # Get Claude decision (with silence info)
             decision = claude_decision(context, silence_detected=silence_detected)
 
-            if decision:
-                # Trigger AI interjection with Claude's decision
-                socketio.start_background_task(ai_interject, room, decision)
+            if decision and decision.get('should_interject'):
+                # Trigger agent using agent_manager (pass session_id and room)
+                socketio.start_background_task(trigger_agent_with_decision, tracking_id, room, decision)
 
     except Exception as e:
         print(f"Error processing audio chunk: {e}")
@@ -619,19 +655,22 @@ def tts_endpoint():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-def check_if_ai_should_interject(room):
+def check_if_ai_should_interject(session_id):
     """
     Determine if the AI should interject in the conversation.
     Uses heuristics like pauses, question patterns, and cooldown periods.
+
+    Args:
+        session_id: Session ID to check (was previously room)
     """
     import time
 
     # Check cooldown
-    last_time = last_ai_interjection.get(room, 0)
+    last_time = last_ai_interjection.get(session_id, 0)
     if time.time() - last_time < AI_INTERJECTION_COOLDOWN:
         return False
 
-    buffer = transcript_buffers.get(room, [])
+    buffer = transcript_buffers.get(session_id, [])
     if len(buffer) < 3:  # Need at least 3 transcripts
         return False
 
@@ -663,102 +702,78 @@ def check_if_ai_should_interject(room):
 
     return False
 
-def ai_interject(room, claude_decision=None):
+def trigger_agent_with_decision(session_id, room, claude_decision=None):
     """
-    Background task to have AI analyze conversation and provide interjection.
-    Uses Claude decision (if provided), then JanitorAI for response generation.
+    Background task to trigger Janitor AI agent based on Claude's decision.
+    Uses agent_manager for proper orchestration.
 
     Args:
-        room: Room ID
+        session_id: Session ID (used for state tracking)
+        room: Room ID (used for socket.io emit)
         claude_decision: Pre-computed decision from Claude (optional)
     """
     import time
 
+    # Check if there's already an interjection in progress for this session
+    if interjection_locks.get(session_id, False):
+        print(f"Skipping interjection for session {session_id} - already in progress")
+        return
+
+    # Acquire lock
+    interjection_locks[session_id] = True
+
     try:
-        # Get transcript buffer
-        buffer = transcript_buffers.get(room, [])
+        # Log Claude's decision
+        if claude_decision:
+            print(f"Claude decision: should_interject={claude_decision.get('should_interject')}, "
+                  f"intent={claude_decision.get('intent')}, "
+                  f"target_user={claude_decision.get('target_user')}, "
+                  f"response_style={claude_decision.get('response_style')}")
 
-        if not buffer:
-            return
+        # Trigger agent using agent_manager
+        success, response_text, error = agent_manager.trigger_agent(session_id)
 
-        # Get recent context
-        recent_context = buffer[-AI_CONTEXT_WINDOW:]
+        if success:
+            # Update last interjection time (using session_id)
+            last_ai_interjection[session_id] = time.time()
 
-        # Combine transcripts into context
-        context = "\n".join([
-            f"User: {t['text']}"
-            for t in recent_context
-        ])
+            # Generate TTS audio for agent response
+            try:
+                audio_bytes = stream_tts(response_text)
+                audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
 
-        # Use pre-computed Claude decision if available, otherwise skip
-        if not claude_decision:
-            print("No Claude decision provided, skipping interjection")
-            return
+                # Emit agent response to room with Claude context
+                socketio.emit('ai_interjection', {
+                    'success': True,
+                    'message': response_text,
+                    'audio': audio_base64,
+                    'format': 'wav',
+                    'claude_decision': claude_decision,  # Include Claude's analysis
+                    'used_fallback': error is not None
+                }, room=room)
 
-        print(f"Claude decision: should_interject={claude_decision.get('should_interject')}, "
-              f"intent={claude_decision.get('intent')}, "
-              f"target_user={claude_decision.get('target_user')}, "
-              f"response_style={claude_decision.get('response_style')}")
+                print(f"Agent interjected in session {session_id} (room {room}): {response_text[:100]}...")
 
-        # STEP 2: If Claude says to interject, call JanitorAI for response
-        if claude_decision.get('should_interject'):
-            # Build enhanced prompt based on Claude's decision
-            intent = claude_decision.get('intent', '')
-            target = claude_decision.get('target_user', 'both')
-            style = claude_decision.get('response_style', 'conversational')
+            except Exception as tts_error:
+                # Send text even if TTS fails
+                socketio.emit('ai_interjection', {
+                    'success': True,
+                    'message': response_text,
+                    'audio': None,
+                    'tts_error': str(tts_error),
+                    'claude_decision': claude_decision,
+                    'used_fallback': error is not None
+                }, room=room)
 
-            # Customize system prompt based on Claude's analysis
-            style_instructions = {
-                'conversational': 'Keep it natural and conversational (2-3 sentences max)',
-                'informative': 'Provide clear, factual information concisely',
-                'supportive': 'Be encouraging and supportive in your response',
-                'question': 'Ask a clarifying or thought-provoking question'
-            }
-
-            system_content = f"You are a helpful AI assistant participating in a video call. {style_instructions.get(style, style_instructions['conversational'])}. Your interjection is aimed at {target}."
-
-            # Generate actual interjection with context from Claude
-            interject_payload = {
-                "model": "ignored",
-                "messages": [
-                    {"role": "system", "content": system_content},
-                    {"role": "user", "content": f"Conversation:\n{context}\n\nContext from analysis: {intent}\n\nProvide a helpful {style} response:"}
-                ],
-                "max_tokens": 150
-            }
-
-            headers = {
-                "Authorization": f"Bearer {JANITOR_AI_KEY}",
-                "Content-Type": "application/json"
-            }
-
-            response = requests.post(JANITOR_AI_URL, headers=headers, json=interject_payload, timeout=30, stream=False)
-            response.raise_for_status()
-
-            # Parse streaming response
-            ai_message = parse_streaming_response(response.text)
-
-            if not ai_message:
-                print("Failed to parse AI interjection response")
-                return
-
-            # Update last interjection time
-            last_ai_interjection[room] = time.time()
-
-            # Emit AI interjection to room with Claude context
-            socketio.emit('ai_interjection', {
-                'success': True,
-                'message': ai_message,
-                'context_used': len(recent_context),
-                'claude_decision': claude_decision  # Include Claude's analysis
-            }, room=room)
-
-            print(f"AI interjected in room {room}: {ai_message}")
+                print(f"Agent interjected (no TTS) in session {session_id}: {response_text[:100]}...")
         else:
-            print(f"Claude decided not to interject: {claude_decision.get('intent')}")
+            print(f"Agent failed for session {session_id}: {error}")
 
     except Exception as e:
-        print(f"Error in AI interjection: {e}")
+        print(f"Error in agent interjection: {e}")
+    finally:
+        # Release lock (using session_id)
+        interjection_locks[session_id] = False
 
 def trigger_agent_background(session_id: str, room: str):
     """
