@@ -21,6 +21,10 @@ let audioChunks = [];
 let isRecording = false;
 let sttInterval;
 
+// Audio playback queue to prevent overlapping
+let audioQueue = [];
+let isPlayingAudio = false;
+
 // DOM elements
 const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
@@ -391,6 +395,26 @@ function displayAIInterjection(message) {
 
 // Speak AI response using Fish Audio TTS
 async function speakAIResponse(text) {
+    // Add to queue instead of playing immediately
+    audioQueue.push(text);
+    console.log(`Added AI response to queue (queue length: ${audioQueue.length})`);
+
+    // Start processing queue if not already playing
+    if (!isPlayingAudio) {
+        processAudioQueue();
+    }
+}
+
+// Process audio queue one at a time
+async function processAudioQueue() {
+    if (audioQueue.length === 0) {
+        isPlayingAudio = false;
+        return;
+    }
+
+    isPlayingAudio = true;
+    const text = audioQueue.shift(); // Get next item from queue
+
     try {
         const response = await fetch('/api/tts', {
             method: 'POST',
@@ -415,11 +439,28 @@ async function speakAIResponse(text) {
             const audioUrl = URL.createObjectURL(audioBlob);
             const audio = new Audio(audioUrl);
 
-            audio.play();
+            // Wait for audio to finish before processing next item
+            audio.onended = () => {
+                console.log('Audio finished playing');
+                URL.revokeObjectURL(audioUrl); // Clean up
+                processAudioQueue(); // Process next item in queue
+            };
+
+            audio.onerror = (error) => {
+                console.error('Error playing audio:', error);
+                URL.revokeObjectURL(audioUrl); // Clean up
+                processAudioQueue(); // Continue with next item even if error
+            };
+
+            await audio.play();
             console.log('Playing AI response audio');
+        } else {
+            // No audio data, continue with next item
+            processAudioQueue();
         }
     } catch (error) {
-        console.error('Error playing AI response:', error);
+        console.error('Error fetching AI response audio:', error);
+        processAudioQueue(); // Continue with next item even if error
     }
 }
 
