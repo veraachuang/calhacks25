@@ -3,6 +3,8 @@ import { Zap, Palette } from "lucide-react";
 import * as THREE from "three";
 import { useNavigate } from "react-router-dom";
 import logo from "./logo2.png";
+import socketService from "../services/socketService";
+import apiService from "../services/apiService";
 
 export default function ProfilePage() {
   const [avatarName, setAvatarName] = useState("");
@@ -11,6 +13,7 @@ export default function ProfilePage() {
   const [personality, setPersonality] = useState("");
   const [hobbies, setHobbies] = useState("");
   const [lookingFor, setLookingFor] = useState("");
+  const [isConnecting, setIsConnecting] = useState(false);
 
   const canvasRef = useRef(null);
   const sceneRef = useRef(null);
@@ -161,11 +164,97 @@ export default function ProfilePage() {
   }, [flameColor]);
 
   // Navigation
-  const handleStartMatching = () => {
+  const handleStartMatching = async () => {
     if (avatarName && personality && hobbies && lookingFor) {
-      navigate("/heartlink", {
-        state: { avatarName, flameColor, spiceLevel, personality, hobbies, lookingFor },
-      });
+      setIsConnecting(true);
+      try {
+        // Connect to backend
+        console.log('🔌 Connecting to backend...');
+        const socket = socketService.connect();
+        
+        // Wait for socket to actually connect
+        await new Promise((resolve, reject) => {
+          if (socket.connected) {
+            resolve();
+          } else {
+            const timeout = setTimeout(() => reject(new Error('Connection timeout')), 10000);
+            socket.once('connect', () => {
+              clearTimeout(timeout);
+              resolve();
+            });
+            socket.once('connect_error', (err) => {
+              clearTimeout(timeout);
+              reject(err);
+            });
+          }
+        });
+        
+        console.log('✅ Socket connected');
+        
+        // Join room (using a default room for matchmaking)
+        const roomName = 'matchmaking';
+        socketService.joinRoom(roomName);
+        
+        // Wait for session_info event with timeout
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('Timeout waiting for session. Check your connection.'));
+          }, 10000); // 10 second timeout
+          
+          socket.once('session_info', async (data) => {
+            clearTimeout(timeout);
+            console.log('📋 Got session info:', data);
+            
+            // Prepare profile data matching backend schema
+            const profileData = {
+              name: avatarName,
+              personality_type: personality,
+              hobbies: hobbies.split(',').map(h => h.trim()).filter(h => h),
+              goal: lookingFor,
+              spiceLevel: spiceLevel,
+              flameColor: flameColor,
+              interests: hobbies.split(',').map(h => h.trim()).filter(h => h)
+            };
+            
+            // Save profile to backend
+            try {
+              await apiService.updateProfile(data.session_id, socket.id, profileData);
+              console.log('✅ Profile saved successfully');
+            } catch (error) {
+              console.error('Failed to save profile:', error);
+              // Continue anyway
+            }
+            
+            resolve(data);
+          });
+        });
+        
+        // Navigate to HeartLink scene
+        navigate("/heartlink", {
+          state: { 
+            avatarName, 
+            flameColor, 
+            spiceLevel, 
+            personality, 
+            hobbies, 
+            lookingFor,
+            sessionId: socketService.getSessionId(),
+            userRole: socketService.getUserRole()
+          },
+        });
+      } catch (error) {
+        console.error('❌ Error connecting to backend:', error);
+        setIsConnecting(false);
+        
+        // More specific error messages
+        if (error.message.includes('timeout') || error.message.includes('Timeout')) {
+          alert('Connection timeout! Check:\n1. Backend server is running\n2. You accepted the HTTPS certificate at https://' + window.location.hostname + ':8765\n3. Your WiFi connection');
+        } else if (error.message.includes('ECONNREFUSED') || error.message.includes('refused')) {
+          alert('Backend server is not running! Start it with: python app.py');
+        } else {
+          alert('Failed to connect to backend:\n' + error.message);
+        }
+      }
     }
   };
 
@@ -314,19 +403,37 @@ export default function ProfilePage() {
                 </div>
                 </div>
 
+          {/* Certificate Help */}
+          <div className="mt-4 p-3 bg-blue-900/30 border border-blue-500/50 rounded-lg">
+            <p className="text-blue-300 text-sm mb-2">
+              ⚠️ First time? Accept the backend certificate:
+            </p>
+            <button
+              onClick={() => window.open(`https://${window.location.hostname}:8765`, '_blank')}
+              className="text-blue-400 hover:text-blue-300 underline text-sm"
+            >
+              Click here to accept certificate →
+            </button>
+            <p className="text-gray-400 text-xs mt-1">
+              (Opens in new tab, click "Advanced" → "Proceed")
+            </p>
+          </div>
+
           {/* CTA */}
           <button
             onClick={handleStartMatching}
-            disabled={!avatarName || !personality || !hobbies || !lookingFor}
-            className={`w-full py-4 rounded-xl font-bold text-lg mt-8 transition-all ${
-              avatarName && personality && hobbies && lookingFor
+            disabled={!avatarName || !personality || !hobbies || !lookingFor || isConnecting}
+            className={`w-full py-4 rounded-xl font-bold text-lg mt-4 transition-all ${
+              avatarName && personality && hobbies && lookingFor && !isConnecting
                 ? "bg-gradient-to-r from-orange-500 to-red-500 text-white hover:scale-105 hover:shadow-xl"
                 : "bg-gray-700 text-gray-500 cursor-not-allowed"
             }`}
           >
-            {avatarName && personality && hobbies && lookingFor
-              ? "Find Your Match"
-              : "Find match!"}
+            {isConnecting
+              ? "🔄 Connecting..."
+              : avatarName && personality && hobbies && lookingFor
+              ? "🔥 Find Your Match"
+              : "Fill out all fields"}
           </button>
         </div>
       </div>

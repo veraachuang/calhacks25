@@ -5,14 +5,25 @@ import ProgressBar from "../components/ProgressBar";
 import { useNavigate, useLocation } from "react-router-dom";
 import * as THREE from "three";
 import "../index.css";
+import socketService from "../services/socketService";
+import webrtcService from "../services/webrtcService";
+import apiService from "../services/apiService";
 
 export default function HeartLinkScene() {
   const [activeSpeaker, setActiveSpeaker] = useState("user1");
   const [matchReady, setMatchReady] = useState(false);
+  const [isVideoEnabled, setIsVideoEnabled] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const [peerConnected, setPeerConnected] = useState(false);
+  const [transcripts, setTranscripts] = useState([]);
+  const [remoteUserName, setRemoteUserName] = useState("User 2");
+  
   const flame1Ref = useRef(null);
   const flame2Ref = useRef(null);
   const scene1Ref = useRef(null);
   const scene2Ref = useRef(null);
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -24,6 +35,8 @@ export default function HeartLinkScene() {
     personality = "",
     hobbies = "",
     lookingFor = "",
+    sessionId = null,
+    userRole = null,
   } = location.state || {};
 
   const flameColors = {
@@ -37,12 +50,90 @@ export default function HeartLinkScene() {
 
   const getCurrentColor = (colorId) => flameColors[colorId] || 0xff4500;
 
+  // Initialize WebRTC and Socket.IO
   useEffect(() => {
-    const interval = setInterval(() => {
-      setActiveSpeaker((prev) => (prev === "user1" ? "user2" : "user1"));
-    }, 3500);
-    return () => clearInterval(interval);
-  }, []);
+    const initConnection = async () => {
+      try {
+        const socket = socketService.getSocket();
+        if (!socket) {
+          console.error('❌ No socket connection');
+          return;
+        }
+
+        // Set up WebRTC service with socket
+        webrtcService.setSocket(socket);
+
+        // Get local media (audio only by default)
+        await webrtcService.getLocalMedia(false);
+        setIsConnected(true);
+
+        // Set up stream callbacks
+        webrtcService.onLocalStream = (stream) => {
+          if (localVideoRef.current) {
+            localVideoRef.current.srcObject = stream;
+          }
+        };
+
+        webrtcService.onRemoteStream = (stream) => {
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = stream;
+          }
+          setPeerConnected(true);
+        };
+
+        // Listen for user joined (peer available)
+        socket.on('user_joined', (data) => {
+          console.log('👤 Peer joined, starting call...');
+          setPeerConnected(true);
+          // Auto-start call when peer joins
+          setTimeout(() => webrtcService.startCall(), 1000);
+        });
+
+        // Listen for transcript updates
+        socket.on('transcript_update', (data) => {
+          console.log('📝 Transcript:', data);
+          setTranscripts(prev => [...prev, {
+            speaker: data.user_id === socket.id ? avatarName : remoteUserName,
+            text: data.text,
+            type: 'user'
+          }]);
+        });
+
+        // Listen for AI interjections
+        socket.on('ai_interjection', (data) => {
+          console.log('🤖 AI:', data.message);
+          setTranscripts(prev => [...prev, {
+            speaker: 'AI',
+            text: data.message,
+            type: 'ai'
+          }]);
+        });
+
+        // Load both profiles to get remote user name
+        if (sessionId) {
+          try {
+            const profiles = await apiService.getBothProfiles(sessionId);
+            const remoteProfile = userRole === 'A' ? profiles.B : profiles.A;
+            if (remoteProfile && remoteProfile.name) {
+              setRemoteUserName(remoteProfile.name);
+            }
+          } catch (error) {
+            console.error('Failed to load profiles:', error);
+          }
+        }
+
+      } catch (error) {
+        console.error('❌ Error initializing connection:', error);
+      }
+    };
+
+    initConnection();
+
+    return () => {
+      // Cleanup on unmount
+      webrtcService.cleanup();
+    };
+  }, [sessionId, userRole, avatarName, remoteUserName]);
 
   // 🔥 reusable flame builder
   const createFlame = (canvasRef, sceneRef, colorId) => {
@@ -160,13 +251,26 @@ export default function HeartLinkScene() {
 
   // mount both flames
   useEffect(() => {
-    const cleanup1 = createFlame(flame1Ref, scene1Ref, flameColor);
-    const cleanup2 = createFlame(flame2Ref, scene2Ref, "pink");
-    return () => {
-      if (cleanup1) cleanup1();
-      if (cleanup2) cleanup2();
-    };
-  }, [flameColor]);
+    if (!isVideoEnabled) {
+      const cleanup1 = createFlame(flame1Ref, scene1Ref, flameColor);
+      const cleanup2 = createFlame(flame2Ref, scene2Ref, "pink");
+      return () => {
+        if (cleanup1) cleanup1();
+        if (cleanup2) cleanup2();
+      };
+    }
+  }, [flameColor, isVideoEnabled]);
+
+  // Handle video toggle
+  const handleToggleVideo = async () => {
+    try {
+      const enabled = await webrtcService.toggleVideo();
+      setIsVideoEnabled(enabled);
+    } catch (error) {
+      console.error('Failed to toggle video:', error);
+      alert('Failed to enable video. Please check camera permissions.');
+    }
+  };
 
   return (
     <div className="relative w-screen h-screen overflow-hidden text-white bg-[#050514]">
@@ -188,6 +292,24 @@ export default function HeartLinkScene() {
         ← Back
       </button>
 
+      {/* Connection Status */}
+      <div className="absolute top-6 right-6 px-4 py-2 rounded-lg bg-white/10 border border-white/20 backdrop-blur-md z-20">
+        <span className="text-sm">
+          {!isConnected && "🔴 Connecting..."}
+          {isConnected && !peerConnected && "🟡 Waiting for peer..."}
+          {isConnected && peerConnected && "🟢 Connected"}
+        </span>
+      </div>
+
+      {/* Video Toggle Button */}
+      <button
+        onClick={handleToggleVideo}
+        disabled={!isConnected}
+        className="absolute top-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-white/10 text-gray-300 hover:text-white border border-white/20 backdrop-blur-md z-20 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {isVideoEnabled ? "📹 Hide Video" : "📹 Show Video"}
+      </button>
+
       {/* Match button */}
       <div className="absolute top-[60px] left-1/2 -translate-x-1/2 z-20">
         <button
@@ -202,29 +324,59 @@ export default function HeartLinkScene() {
         </button>
       </div>
 
-      {/* Flames */}
+      {/* Flames or Video */}
       <div className="absolute inset-0 flex items-center justify-between px-24 pointer-events-none">
         <div className="flex flex-col items-center">
-          <canvas ref={flame1Ref} className="w-[200px] h-[200px]" />
+          {!isVideoEnabled ? (
+            <canvas ref={flame1Ref} className="w-[200px] h-[200px]" />
+          ) : (
+            <video 
+              ref={localVideoRef} 
+              autoPlay 
+              muted 
+              playsInline 
+              className="w-[300px] h-[225px] rounded-2xl border-2 border-white/20 shadow-xl pointer-events-auto"
+            />
+          )}
           <p className="text-white/80 font-semibold mt-3">{avatarName}</p>
         </div>
         <div className="flex flex-col items-center">
-          <canvas ref={flame2Ref} className="w-[200px] h-[200px]" />
-          <p className="text-white/80 font-semibold mt-3">User 2</p>
+          {!isVideoEnabled ? (
+            <canvas ref={flame2Ref} className="w-[200px] h-[200px]" />
+          ) : (
+            <video 
+              ref={remoteVideoRef} 
+              autoPlay 
+              playsInline 
+              className="w-[300px] h-[225px] rounded-2xl border-2 border-white/20 shadow-xl pointer-events-auto"
+            />
+          )}
+          <p className="text-white/80 font-semibold mt-3">{remoteUserName}</p>
         </div>
       </div>
 
       {/* AI Chat */}
       <div
-        className="glass-box absolute bottom-16 left-1/2 -translate-x-1/2 w-3/5 p-6 text-center"
-        style={{ maxWidth: "700px" }}
+        className="glass-box absolute bottom-16 left-1/2 -translate-x-1/2 w-3/5 p-6 overflow-y-auto"
+        style={{ maxWidth: "700px", maxHeight: "300px" }}
       >
-        <h2 className="text-pink-400 font-semibold text-xl mb-2">HeartLink AI Mediator 🤍</h2>
-        <p className="text-gray-200 text-base leading-relaxed">
-          <b>{avatarName}:</b> “Hey, what kind of music do you like?” <br />
-          <b>User 2:</b> “I’m really into ambient techno.” <br />
-          <b className="text-pink-300">AI:</b> “Interesting — both of you seem drawn to rhythm and flow.” 🎵
-        </p>
+        <h2 className="text-pink-400 font-semibold text-xl mb-3 text-center">HeartLink AI Mediator 🤍</h2>
+        <div className="text-gray-200 text-base leading-relaxed space-y-2 text-left">
+          {transcripts.length === 0 ? (
+            <p className="text-center text-gray-400 italic">Start talking to see transcripts...</p>
+          ) : (
+            transcripts.slice(-5).map((t, idx) => (
+              <p key={idx}>
+                {t.type === 'ai' ? (
+                  <span className="text-pink-300 font-bold">AI: </span>
+                ) : (
+                  <span className="font-bold">{t.speaker}: </span>
+                )}
+                <span>{t.text}</span>
+              </p>
+            ))
+          )}
+        </div>
       </div>
     </div>
   );

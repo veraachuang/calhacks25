@@ -866,12 +866,40 @@ if __name__ == '__main__':
     # Initialize profile system
     profile_manager.init_profiles()
     
+    # Get local IP for display
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+    except:
+        local_ip = "YOUR_LOCAL_IP"
+    
     # Using a higher port number to avoid conflicts on large networks
     PORT = 8765  # Change this if needed
-    print(f"\n🚀 Server starting on port {PORT} with HTTPS")
-    print(f"📱 Local access: https://localhost:{PORT}")
-    print(f"🌐 Network access: https://[YOUR_LOCAL_IP]:{PORT}")
-    print(f"⚠️  Remote users: Accept the browser security warning to proceed\n")
+    
+    print("\n" + "="*70)
+    print("🚀 HEARTLINK BACKEND SERVER")
+    print("="*70)
+    print(f"\n📱 Local access:   https://localhost:{PORT}")
+    print(f"🌐 Network access: https://{local_ip}:{PORT}")
+    print(f"\n⚠️  IMPORTANT: Remote users must accept the browser security warning")
+    print(f"   (self-signed SSL certificate)")
+    
+    # Check if certificates exist
+    if not os.path.exists('cert.pem') or not os.path.exists('key.pem'):
+        print(f"\n❌ ERROR: SSL certificates not found!")
+        print(f"   Run: python setup_network.py")
+        print(f"   Or:  openssl req -x509 -newkey rsa:4096 -nodes \\")
+        print(f"          -out cert.pem -keyout key.pem -days 365 \\")
+        print(f'          -subj "/CN=localhost" \\')
+        print(f'          -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:{local_ip}"')
+        print("="*70 + "\n")
+        exit(1)
+    
+    print(f"\n✅ SSL certificates found")
+    print(f"\n💡 TIP: For cross-device setup, run: python setup_network.py")
+    print("="*70 + "\n")
     
     # Run with HTTPS using self-signed certificate
     # ssl_context expects a tuple of (certfile, keyfile)
