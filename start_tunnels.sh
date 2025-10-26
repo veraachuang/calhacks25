@@ -42,24 +42,42 @@ echo "   - Backend tunnel (port 8765)"
 echo "   - Frontend tunnel (port 5173)"
 echo ""
 
-# Start both tunnels using the config file
+# Start both tunnels using the config file in background
 echo "🔧 Starting both tunnels with ngrok config file..."
-ngrok start --all --config ngrok.yml
+echo ""
 
+# Run ngrok in background
+ngrok start --all --config ngrok.yml > /dev/null 2>&1 &
+NGROK_PID=$!
+
+echo "⏳ Waiting for ngrok to initialize..."
+sleep 3
+
+# Check if ngrok is running
+if ! kill -0 $NGROK_PID 2>/dev/null; then
+    echo "❌ Error: ngrok failed to start"
+    echo ""
+    echo "Try running manually to see the error:"
+    echo "  ngrok start --all --config ngrok.yml"
+    exit 1
+fi
+
+echo "✅ ngrok started (PID: $NGROK_PID)"
 echo ""
-echo "💡 If ngrok exited, you'll see the URLs above"
-echo ""
+
+# Automatically update .env file
+echo "🔄 Auto-updating .env file with ngrok URLs..."
+./update_ngrok_env.sh
+
 echo "📋 Next steps:"
-echo "   1. Look for TWO forwarding URLs in the ngrok output above"
-echo "   2. Identify which is backend (→ 8765) and frontend (→ 5173)"
-echo "   3. Create a .env file with the BACKEND URL:"
-echo "      cd heartlink-app"
-echo "      echo 'VITE_BACKEND_URL=https://YOUR_BACKEND_NGROK_URL' > .env"
-echo "   4. Start backend: ./run_backend_ngrok.sh"
-echo "   5. Start frontend: cd heartlink-app && npm run dev"
-echo "   6. Access your app via the FRONTEND ngrok URL"
+echo "   1. Start backend: ./run_backend_ngrok.sh"
+echo "   2. Start frontend: cd heartlink-app && npm run dev"
+echo "   3. Access your app via the FRONTEND ngrok URL shown above"
 echo ""
-echo "💡 Tip: Keep the ngrok window open while using the app"
-echo "🌐 Monitor traffic at: http://localhost:4040"
+echo "💡 Tips:"
+echo "   - ngrok is running in background (PID: $NGROK_PID)"
+echo "   - Monitor traffic at: http://localhost:4040"
+echo "   - If ngrok URLs change, run: ./update_ngrok_env.sh"
+echo "   - To stop ngrok: kill $NGROK_PID"
 echo ""
 
