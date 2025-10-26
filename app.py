@@ -8,6 +8,7 @@ import os
 import base64
 import requests
 import json
+import anthropic
 
 # Add src directory to path for Fish Audio imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -27,13 +28,22 @@ transcript_buffers = {}
 # Store last AI interjection time per room (to avoid spamming)
 last_ai_interjection = {}
 
+# Store last audio activity time per room (for silence detection)
+last_audio_activity = {}
+
 # JanitorAI configuration
 JANITOR_AI_URL = "https://janitorai.com/hackathon/completions"
 JANITOR_AI_KEY = "calhacks2047"
 
+# Claude API configuration
+CLAUDE_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
+claude_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY) if CLAUDE_API_KEY else None
+CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
+
 # AI agent configuration
 AI_INTERJECTION_COOLDOWN = 10  # seconds between AI interjections
 AI_CONTEXT_WINDOW = 20  # number of recent transcripts to consider
+SILENCE_THRESHOLD = 3.0  # seconds of silence before AI considers interjecting
 
 # Audio quality thresholds
 MIN_TRANSCRIPT_LENGTH = 3  # Minimum characters to be considered valid
@@ -85,6 +95,64 @@ def parse_streaming_response(response_text):
 
     except Exception as e:
         print(f"Error parsing streaming response: {e}")
+        return None
+
+def claude_decision(context, silence_detected=False):
+    """
+    Use Claude Sonnet 4.5 to decide if AI should interject.
+
+    Args:
+        context: Recent conversation transcript
+        silence_detected: True if there has been 3+ seconds of silence
+
+    Returns:
+        dict with keys: should_interject, intent, target_user, response_style
+        Returns None if API call fails
+    """
+    if not claude_client:
+        print("Claude API key not configured")
+        return None
+
+    try:
+        silence_note = "\n\nIMPORTANT: There has been 3+ seconds of silence. You should interject to keep the conversation flowing." if silence_detected else ""
+
+        message = claude_client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=200,
+            messages=[{
+                "role": "user",
+                "content": f"""Analyze this conversation and decide if an AI assistant should interject:
+
+{context}{silence_note}
+
+Respond with ONLY valid JSON (no markdown):
+{{
+  "should_interject": true or false,
+  "intent": "brief reason",
+  "target_user": "A" or "B" or "both",
+  "response_style": "conversational" or "informative" or "supportive" or "question"
+}}"""
+            }]
+        )
+
+        decision_text = message.content[0].text.strip()
+
+        # Parse JSON (handle markdown if present)
+        if decision_text.startswith('```json'):
+            decision_text = decision_text[7:]
+        if decision_text.startswith('```'):
+            decision_text = decision_text[3:]
+        if decision_text.endswith('```'):
+            decision_text = decision_text[:-3]
+
+        decision = json.loads(decision_text.strip())
+        print(f"Claude decision: {decision}")
+        return decision
+
+    except Exception as e:
+        print(f"Claude API error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 @app.route('/')
@@ -342,7 +410,7 @@ def handle_audio_chunk(data):
         if len(audio_data) < MIN_AUDIO_SIZE:
             return
 
-        # Perform STT using Fish Audio ASR
+        # Use Fish Audio for STT
         transcript = stream_asr(audio_data)
 
         # Check if transcript is meaningful
@@ -355,14 +423,16 @@ def handle_audio_chunk(data):
         if session_id:
             try:
                 session = session_manager.load_session(session_id)
-                if session:
+                if session and 'user_a' in session and 'user_b' in session:
                     # Determine speaker role (A or B)
-                    speaker = 'A' if session['user_a'] == user_id else 'B'
+                    speaker = 'A' if session.get('user_a') == user_id else 'B'
 
                     # Add to session transcript
                     session_manager.append_transcript(session_id, speaker, transcript)
 
                     print(f"Added to session {session_id} - {speaker}: {transcript}")
+            except KeyError as e:
+                print(f"Session missing required fields: {e}")
             except Exception as e:
                 print(f"Error adding to session manager: {e}")
 
@@ -385,11 +455,26 @@ def handle_audio_chunk(data):
 
         print(f"Transcribed from {user_id}: {transcript}")
 
-        # Check if AI should interject
-        should_interject = check_if_ai_should_interject(room)
-        if should_interject:
-            # Trigger AI interjection asynchronously
-            socketio.start_background_task(ai_interject, room)
+        # Update last audio activity timestamp for this room
+        last_audio_activity[room] = time.time()
+
+        # Check if AI should interject using heuristics
+        if check_if_ai_should_interject(room):
+            # Get recent context for Claude decision
+            buffer = transcript_buffers.get(room, [])
+            recent_context = buffer[-AI_CONTEXT_WINDOW:]
+            context = "\n".join([f"User: {t['text']}" for t in recent_context])
+
+            # Check for silence (3+ seconds since last audio)
+            time_since_last_audio = time.time() - last_audio_activity.get(room, time.time())
+            silence_detected = time_since_last_audio >= SILENCE_THRESHOLD
+
+            # Get Claude decision (with silence info)
+            decision = claude_decision(context, silence_detected=silence_detected)
+
+            if decision:
+                # Trigger AI interjection with Claude's decision
+                socketio.start_background_task(ai_interject, room, decision)
 
     except Exception as e:
         print(f"Error processing audio chunk: {e}")
@@ -523,9 +608,14 @@ def check_if_ai_should_interject(room):
 
     return False
 
-def ai_interject(room):
+def ai_interject(room, claude_decision=None):
     """
     Background task to have AI analyze conversation and provide interjection.
+    Uses Claude decision (if provided), then JanitorAI for response generation.
+
+    Args:
+        room: Room ID
+        claude_decision: Pre-computed decision from Claude (optional)
     """
     import time
 
@@ -545,41 +635,46 @@ def ai_interject(room):
             for t in recent_context
         ])
 
-        # Call JanitorAI to determine if interjection is appropriate
-        check_payload = {
-            "model": "ignored",
-            "messages": [
-                {"role": "system", "content": "You are an AI assistant listening to a conversation. Analyze if you should provide helpful input now. Respond with ONLY 'YES' or 'NO' followed by a brief reason."},
-                {"role": "user", "content": f"Conversation:\n{context}\n\nShould I interject with helpful information or suggestions?"}
-            ],
-            "max_tokens": 50
-        }
-
-        headers = {
-            "Authorization": f"Bearer {JANITOR_AI_KEY}",
-            "Content-Type": "application/json"
-        }
-
-        response = requests.post(JANITOR_AI_URL, headers=headers, json=check_payload, timeout=30, stream=False)
-        response.raise_for_status()
-
-        # Parse streaming SSE response
-        decision = parse_streaming_response(response.text)
-
-        if not decision:
-            print("Failed to parse streaming response")
+        # Use pre-computed Claude decision if available, otherwise skip
+        if not claude_decision:
+            print("No Claude decision provided, skipping interjection")
             return
 
-        # If AI decides to interject
-        if decision.strip().upper().startswith('YES'):
-            # Generate actual interjection
+        print(f"Claude decision: should_interject={claude_decision.get('should_interject')}, "
+              f"intent={claude_decision.get('intent')}, "
+              f"target_user={claude_decision.get('target_user')}, "
+              f"response_style={claude_decision.get('response_style')}")
+
+        # STEP 2: If Claude says to interject, call JanitorAI for response
+        if claude_decision.get('should_interject'):
+            # Build enhanced prompt based on Claude's decision
+            intent = claude_decision.get('intent', '')
+            target = claude_decision.get('target_user', 'both')
+            style = claude_decision.get('response_style', 'conversational')
+
+            # Customize system prompt based on Claude's analysis
+            style_instructions = {
+                'conversational': 'Keep it natural and conversational (2-3 sentences max)',
+                'informative': 'Provide clear, factual information concisely',
+                'supportive': 'Be encouraging and supportive in your response',
+                'question': 'Ask a clarifying or thought-provoking question'
+            }
+
+            system_content = f"You are a helpful AI assistant participating in a video call. {style_instructions.get(style, style_instructions['conversational'])}. Your interjection is aimed at {target}."
+
+            # Generate actual interjection with context from Claude
             interject_payload = {
                 "model": "ignored",
                 "messages": [
-                    {"role": "system", "content": "You are a helpful AI assistant participating in a video call. Provide brief, natural, and helpful input to the conversation. Keep it conversational and concise (2-3 sentences max)."},
-                    {"role": "user", "content": f"Conversation:\n{context}\n\nProvide a helpful comment or suggestion:"}
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": f"Conversation:\n{context}\n\nContext from analysis: {intent}\n\nProvide a helpful {style} response:"}
                 ],
                 "max_tokens": 150
+            }
+
+            headers = {
+                "Authorization": f"Bearer {JANITOR_AI_KEY}",
+                "Content-Type": "application/json"
             }
 
             response = requests.post(JANITOR_AI_URL, headers=headers, json=interject_payload, timeout=30, stream=False)
@@ -595,16 +690,17 @@ def ai_interject(room):
             # Update last interjection time
             last_ai_interjection[room] = time.time()
 
-            # Emit AI interjection to room
+            # Emit AI interjection to room with Claude context
             socketio.emit('ai_interjection', {
                 'success': True,
                 'message': ai_message,
-                'context_used': len(recent_context)
+                'context_used': len(recent_context),
+                'claude_decision': claude_decision  # Include Claude's analysis
             }, room=room)
 
             print(f"AI interjected in room {room}: {ai_message}")
         else:
-            print(f"AI decided not to interject: {decision}")
+            print(f"Claude decided not to interject: {claude_decision.get('intent')}")
 
     except Exception as e:
         print(f"Error in AI interjection: {e}")

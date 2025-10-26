@@ -14,14 +14,21 @@ project.data
 # Previews/
 
 # ——— Python ———
+# Virtual environments
 venv/
 env/
 ENV/
+.venv/
+.env/
+
+# Python compiled files
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+
+# Distribution / packaging
 .buildozer/
 .eggs/
 *.egg-info/
@@ -38,6 +45,27 @@ lib64/
 parts/
 sdist/
 var/
+pip-wheel-metadata/
+
+# Pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
 
 # ——— Node / Web ———
 node_modules/
