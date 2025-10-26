@@ -4,7 +4,7 @@ import HeartLinkScene from './pages/HeartLinkScene';
 
 export default function App() {
   return (
-    <Router>
+    <Router basename="/calhacks25">
       <Routes>
         <Route path="/" element={<ProfilePage />} />
         <Route path="/heartlink" element={<HeartLinkScene />} />
