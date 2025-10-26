@@ -1,7 +1,7 @@
 import { io } from 'socket.io-client';
 
 // Use environment variable for backend URL (ngrok tunnel) or fall back to localhost
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || `https://${window.location.hostname}:8765`;
+const BACKEND_URL = `https://${window.location.hostname}:8765`;
 
 class SocketService {
   constructor() {
