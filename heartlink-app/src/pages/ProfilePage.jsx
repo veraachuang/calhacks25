@@ -418,7 +418,7 @@ export default function ProfilePage() {
               ⚠️ First time? Accept the backend certificate:
             </p>
             <button
-              onClick={() => window.open(`https://${window.location.hostname}:8765`, '_blank')}
+              onClick={() => window.open(`https://${window.location.hostname}`, '_blank')}
               className="text-blue-400 hover:text-blue-300 underline text-sm"
             >
               Click here to accept certificate →

@@ -18,7 +18,7 @@ export default function DebugConnection() {
     
     try {
       // Step 1: Check backend URL
-      const backendUrl = `https://${window.location.hostname}:8765`;
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || `https://${window.location.hostname}`;
       addLog(`🔗 Backend URL: ${backendUrl}`, 'info');
       
       // Step 2: Try to connect socket

@@ -155,14 +155,16 @@ export default function HeartLinkScene() {
         // Listen for transcript updates
         socket.on('transcript_update', (data) => {
           console.log('📝 Transcript:', data);
+          // Use speaker_name from backend if available, otherwise fall back to user_id comparison
+          const speakerName = data.speaker_name || (data.user_id === socket.id ? avatarName : remoteUserName);
           setTranscripts(prev => [...prev, {
-            speaker: data.user_id === socket.id ? avatarName : remoteUserName,
+            speaker: speakerName,
             text: data.text,
             type: 'user'
           }]);
         });
 
-        // Listen for AI interjections
+        // Listen for AI interjections (old flow - no audio)
         socket.on('ai_interjection', (data) => {
           console.log('🤖 AI:', data.message);
           setTranscripts(prev => [...prev, {
@@ -170,6 +172,32 @@ export default function HeartLinkScene() {
             text: data.message,
             type: 'ai'
           }]);
+        });
+
+        // Listen for agent responses (new flow - with audio)
+        socket.on('agent_response', (data) => {
+          console.log('🤖 Agent:', data.response);
+          setTranscripts(prev => [...prev, {
+            speaker: 'AI',
+            text: data.response,
+            type: 'ai'
+          }]);
+
+          // Play audio if available
+          if (data.audio) {
+            try {
+              const audioData = `data:audio/wav;base64,${data.audio}`;
+              const audio = new Audio(audioData);
+              audio.volume = 1.0;
+              audio.play().then(() => {
+                console.log('✅ Playing AI audio');
+              }).catch(err => {
+                console.error('❌ Failed to play AI audio:', err);
+              });
+            } catch (err) {
+              console.error('❌ Error creating AI audio:', err);
+            }
+          }
         });
 
         // Load both profiles to get remote user name

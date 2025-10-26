@@ -31,9 +31,12 @@ class FishSessionManager:
         if self._initialized:
             return
 
-        self.api_key = os.getenv('FISH_API_KEY', '570c8155fed341b3a70212f41fc8fc44')
+        self.api_key = os.getenv('FISH_API_KEY', '')
         self.api_base = os.getenv('FISH_API_BASE', 'https://api.fish.audio')
         self.mock_mode = os.getenv('FISH_MOCK', 'false').lower() == 'true'
+
+        if not self.api_key:
+            raise ValueError("FISH_API_KEY environment variable is required")
 
         self._asr_session = None
         self._tts_session = None

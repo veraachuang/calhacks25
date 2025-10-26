@@ -185,19 +185,33 @@ class WebRTCService {
         const videoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         const newVideoTrack = videoStream.getVideoTracks()[0];
         this.localStream.addTrack(newVideoTrack);
-        
-        // Add to peer connection if active
+
+        // Add to peer connection if active and trigger renegotiation
         if (this.peerConnection) {
           this.peerConnection.addTrack(newVideoTrack, this.localStream);
+
+          // Renegotiate to send video to peer
+          console.log('🔄 Renegotiating connection to add video...');
+          const offer = await this.peerConnection.createOffer();
+          await this.peerConnection.setLocalDescription(offer);
+
+          // Send offer to peer via socket
+          if (this.socket && this.targetId) {
+            this.socket.emit('offer', {
+              target: this.targetId,
+              offer: offer
+            });
+            console.log('📤 Sent renegotiation offer to peer');
+          }
         }
-        
+
         this.isVideoEnabled = true;
         console.log('📹 Video enabled');
-        
+
         if (this.onLocalStream) {
           this.onLocalStream(this.localStream);
         }
-        
+
         return true;
       } catch (error) {
         console.error('❌ Error enabling video:', error);

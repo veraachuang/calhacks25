@@ -130,13 +130,18 @@ def build_agent_prompt(session_id: str) -> Optional[Dict]:
         # Load session
         session = session_manager.load_session(session_id)
         if not session:
-            print(f"Session {session_id} not found")
+            print(f"❌ Session {session_id} not found")
+            print(f"   Available sessions: {list(session_manager.sessions.keys())}")
             return None
 
         # Check if session is active (both users have joined)
-        if session.get('status') != 'active':
-            print(f"Session {session_id} is not active yet (status: {session.get('status')})")
+        session_status = session.get('status', 'unknown')
+        if session_status != 'active':
+            print(f"⚠️ Session {session_id} is not active yet (status: {session_status})")
+            print(f"   Session has user_a: {'user_a' in session}, user_b: {'user_b' in session}")
             return None
+
+        print(f"✅ Session {session_id} is active, building prompt...")
 
         # Load profiles
         profiles = profile_manager.get_both_profiles(session_id)
@@ -416,6 +421,9 @@ def trigger_agent(session_id: str) -> Tuple[bool, Optional[str], Optional[str]]:
     try:
         # Check if agent is busy or in cooldown
         if _is_agent_busy(session_id):
+            state = _agent_state.get(session_id, {})
+            cooldown_remaining = max(0, AGENT_COOLDOWN_SEC - (time.time() - state.get('last_call', 0)))
+            print(f"⏳ Agent busy for session {session_id}: cooldown {cooldown_remaining:.1f}s remaining")
             return (False, None, "Agent is busy or in cooldown")
         
         # Mark as busy

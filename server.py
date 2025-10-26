@@ -11,6 +11,10 @@ import base64
 import requests
 import json
 import anthropic
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Add src directory to path for Fish Audio imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -18,7 +22,14 @@ from fish import stream_asr, stream_tts
 
 app = Flask(__name__, template_folder='app/templates', static_folder='app/static')
 app.config['SECRET_KEY'] = 'your-secret-key-here'
-socketio = SocketIO(app, cors_allowed_origins="*", max_http_buffer_size=10**8)
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    max_http_buffer_size=10**8,
+    ping_timeout=60,          # Wait 60s for pong response before disconnecting
+    ping_interval=25,         # Send ping every 25s to keep connection alive
+    async_mode='eventlet'     # Use eventlet for better async handling
+)
 
 # Store active users and their sessions
 active_users = {}  # socket_id -> user_info
@@ -540,18 +551,31 @@ def handle_audio_chunk(data):
 
         import time
 
+        # Determine speaker info
+        speaker_role = None
+        speaker_name = None
+
         # Store in session manager if user is in a session
         if session_id:
             try:
                 session = session_manager.load_session(session_id)
                 if session and 'user_a' in session and 'user_b' in session:
                     # Determine speaker role (A or B)
-                    speaker = 'A' if session.get('user_a') == user_id else 'B'
+                    speaker_role = 'A' if session.get('user_a') == user_id else 'B'
+
+                    # Get speaker name from profiles
+                    try:
+                        profiles = profile_manager.get_both_profiles(session_id)
+                        speaker_profile = profiles.get(speaker_role)
+                        if speaker_profile:
+                            speaker_name = speaker_profile.get('name', f'User {speaker_role}')
+                    except:
+                        speaker_name = f'User {speaker_role}'
 
                     # Add to session transcript
-                    session_manager.append_transcript(session_id, speaker, transcript)
+                    session_manager.append_transcript(session_id, speaker_role, transcript)
 
-                    print(f"Added to session {session_id} - {speaker}: {transcript}")
+                    print(f"Added to session {session_id} - {speaker_role} ({speaker_name}): {transcript}")
             except KeyError as e:
                 print(f"Session missing required fields: {e}")
             except Exception as e:
@@ -567,9 +591,11 @@ def handle_audio_chunk(data):
             'timestamp': time.time()
         })
 
-         # Emit transcript back to all users in room
+         # Emit transcript back to all users in room with speaker info
         emit('transcript_update', {
             'user_id': user_id,
+            'speaker_role': speaker_role,
+            'speaker_name': speaker_name,
             'text': transcript,
             'session_id': session_id
         }, room=room)
@@ -579,23 +605,29 @@ def handle_audio_chunk(data):
         # Update last audio activity timestamp for this room
         last_audio_activity[room] = time.time()
 
-        # Check if AI should interject using heuristics
-        if check_if_ai_should_interject(room):
-            # Get recent context for Claude decision
-            buffer = transcript_buffers.get(room, [])
-            recent_context = buffer[-AI_CONTEXT_WINDOW:]
-            context = "\n".join([f"User: {t['text']}" for t in recent_context])
+        # Check if AI should interject using heuristics (only if user is in a session)
+        if session_id and check_if_ai_should_interject(room):
+            # Verify session is actually active before calling Claude
+            session = session_manager.load_session(session_id)
+            if not session or session.get('status') != 'active':
+                print(f"⏭️ Skipping AI interjection - session {session_id} not active (status: {session.get('status') if session else 'not found'})")
+            else:
+                # Get recent context for Claude decision
+                buffer = transcript_buffers.get(room, [])
+                recent_context = buffer[-AI_CONTEXT_WINDOW:]
+                context = "\n".join([f"User: {t['text']}" for t in recent_context])
 
-            # Check for silence (3+ seconds since last audio)
-            time_since_last_audio = time.time() - last_audio_activity.get(room, time.time())
-            silence_detected = time_since_last_audio >= SILENCE_THRESHOLD
+                # Check for silence (3+ seconds since last audio)
+                time_since_last_audio = time.time() - last_audio_activity.get(room, time.time())
+                silence_detected = time_since_last_audio >= SILENCE_THRESHOLD
 
-            # Get Claude decision (with silence info)
-            decision = claude_decision(context, silence_detected=silence_detected)
+                # Get Claude decision (with silence info)
+                decision = claude_decision(context, silence_detected=silence_detected)
 
-            if decision:
-                # Trigger AI interjection with Claude's decision
-                socketio.start_background_task(ai_interject, room, decision)
+                if decision and decision.get('should_interject'):
+                    # Use agent_manager instead of old JanitorAI direct call
+                    # This gives better responses with profile context
+                    socketio.start_background_task(trigger_agent_background, session_id, room)
 
     except Exception as e:
         print(f"Error processing audio chunk: {e}")
