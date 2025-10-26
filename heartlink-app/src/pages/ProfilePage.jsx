@@ -231,22 +231,25 @@ export default function ProfilePage() {
               />
 
               {/* Personality */}
-              <label className="text-white text-lg font-semibold mb-3 block">Personality Type</label>
-              <div className="grid grid-cols-2 gap-3 mb-6">
-                {["introvert", "extrovert"].map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => setPersonality(type)}
-                    className={`py-3 px-4 rounded-xl font-medium transition-all ${
-                      personality === type
-                        ? "bg-gradient-to-r from-pink-500 to-orange-500 text-white shadow-lg"
-                        : "bg-gray-700/30 text-gray-300 hover:bg-gray-700/50"
-                    }`}
-                  >
-                    {type.charAt(0).toUpperCase() + type.slice(1)}
-                  </button>
-                ))}
-              </div>
+              <label className="text-white text-lg font-semibold mb-3 block">
+            Personality Type
+            </label>
+
+            <div className="grid grid-cols-3 gap-2 mb-6">
+            {["introvert", "ambivert", "extrovert"].map((type) => (
+                <button
+                key={type}
+                onClick={() => setPersonality(type)}
+                className={`py-2 px-3 text-sm rounded-lg font-medium transition-all ${
+                    personality === type
+                    ? "bg-gradient-to-r from-pink-500 to-orange-500 text-white shadow-md scale-105"
+                    : "bg-gray-700/30 text-gray-300 hover:bg-gray-700/50"
+                }`}
+                >
+                {type.charAt(0).toUpperCase() + type.slice(1)}
+                </button>
+            ))}
+            </div>
 
               {/* Hobbies */}
               <label className="text-white text-lg font-semibold mb-3 block">What are your hobbies?</label>
@@ -271,66 +274,45 @@ export default function ProfilePage() {
               />
             </div>
           </div>
-          {/* Personality Type */}
-              <div className="mb-6">
-                <label className="text-white text-lg font-semibold mb-3 block">
-                  Personality Type
+          <div className="flex-1">
+                <label className="flex items-center gap-2 text-white text-lg font-semibold mb-4">
+                  <Zap className="w-5 h-5" />
+                  Conversation Intensity
                 </label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    onClick={() => setPersonality('introvert')}
-                    className={`py-3 px-4 rounded-xl font-medium transition-all ${
-                      personality === 'introvert'
-                        ? 'bg-gradient-to-r from-purple-500 to-blue-500 text-white shadow-lg'
-                        : 'bg-gray-700/30 text-gray-300 hover:bg-gray-700/50'
-                    }`}
-                  >
-                    Introvert
-                  </button>
-                  <button
-                    onClick={() => setPersonality('extrovert')}
-                    className={`py-3 px-4 rounded-xl font-medium transition-all ${
-                      personality === 'extrovert'
-                        ? 'bg-gradient-to-r from-pink-500 to-orange-500 text-white shadow-lg'
-                        : 'bg-gray-700/30 text-gray-300 hover:bg-gray-700/50'
-                    }`}
-                  >
-                    Extrovert
-                  </button>
+                
+                <div className="space-y-3">
+                  {spiceLevels.map((level) => (
+                    <button
+                      key={level.level}
+                      onClick={() => setSpiceLevel(level.level)}
+                      className={`w-full p-4 rounded-xl transition-all transform hover:scale-102 ${
+                        spiceLevel === level.level
+                          ? `bg-gradient-to-r ${level.color} text-white shadow-lg`
+                          : 'bg-gray-700/30 text-gray-300 hover:bg-gray-700/50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="text-left">
+                          <div className="font-bold text-lg">{level.label}</div>
+                          <div className={`text-sm ${spiceLevel === level.level ? 'text-white/90' : 'text-gray-400'}`}>
+                            {level.desc}
+                          </div>
+                        </div>
+                        <div className="flex gap-1">
+                          {[...Array(level.level)].map((_, i) => (
+                            <div
+                              key={i}
+                              className={`w-2 h-8 rounded-full ${
+                                spiceLevel === level.level ? 'bg-white/80' : 'bg-gray-500'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
                 </div>
-              </div>
-
-              {/* Hobbies */}
-              <div className="mb-6">
-                <label className="text-white text-lg font-semibold mb-3 block">
-                  What are your hobbies?
-                </label>
-                <textarea
-                  value={hobbies}
-                  onChange={(e) => setHobbies(e.target.value)}
-                  placeholder="e.g., Gaming, reading, hiking..."
-                  className="w-full bg-gray-700/50 border border-gray-600 rounded-xl px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all resize-none"
-                  rows={3}
-                  maxLength={150}
-                />
-                <p className="text-gray-500 text-xs mt-1">{hobbies.length}/150</p>
-              </div>
-
-              {/* Looking For */}
-              <div className="mb-6">
-                <label className="text-white text-lg font-semibold mb-3 block">
-                  What are you looking for?
-                </label>
-                <textarea
-                  value={lookingFor}
-                  onChange={(e) => setLookingFor(e.target.value)}
-                  placeholder="e.g., Deep conversations, new friends, casual chat..."
-                  className="w-full bg-gray-700/50 border border-gray-600 rounded-xl px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all resize-none"
-                  rows={3}
-                  maxLength={150}
-                />
-                <p className="text-gray-500 text-xs mt-1">{lookingFor.length}/150</p>
-              </div>
+                </div>
 
           {/* CTA */}
           <button
@@ -344,7 +326,7 @@ export default function ProfilePage() {
           >
             {avatarName && personality && hobbies && lookingFor
               ? "Find Your Match"
-              : "Complete Your Profile"}
+              : "Find match!"}
           </button>
         </div>
       </div>
