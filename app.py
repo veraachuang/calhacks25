@@ -377,32 +377,47 @@ def handle_join(data):
 
     # Create or join a session
     try:
-        # Check if there's a waiting session
-        waiting_session = session_manager.get_waiting_session()
+        # First check if this room already has a session mapped to it
+        if room in room_to_session:
+            # Room has an existing session - join it
+            existing_session_id = room_to_session[room]
+            existing_session = session_manager.load_session(existing_session_id)
 
-        if waiting_session:
-            # Join existing session
-            session = session_manager.join_session(waiting_session['session_id'], request.sid)
-            session_id = session['session_id']
-            user_sessions[request.sid] = session_id
-            room_to_session[room] = session_id  # Map room to session
-            print(f'User {request.sid} joined session {session_id}')
+            if existing_session and existing_session.get('status') == 'waiting':
+                # Join the existing waiting session
+                session = session_manager.join_session(existing_session_id, request.sid)
+                session_id = session['session_id']
+                user_sessions[request.sid] = session_id
+                print(f'User {request.sid} joined existing session {session_id} for room {room}')
 
-            # Attach profiles when session becomes active
-            profile_manager.attach_profiles_to_session(session_id)
+                # Attach profiles when session becomes active
+                profile_manager.attach_profiles_to_session(session_id)
 
-            emit('session_info', {
-                'session_id': session_id,
-                'role': 'B',
-                'status': 'active'
-            })
+                emit('session_info', {
+                    'session_id': session_id,
+                    'role': 'B',
+                    'status': 'active'
+                })
+            else:
+                # Session exists but is not waiting (already active or ended)
+                # Create a new session for this room
+                session = session_manager.create_session(request.sid)
+                session_id = session['session_id']
+                user_sessions[request.sid] = session_id
+                room_to_session[room] = session_id
+                print(f'User {request.sid} created new session {session_id} for room {room} (previous session not waiting)')
+                emit('session_info', {
+                    'session_id': session_id,
+                    'role': 'A',
+                    'status': 'waiting'
+                })
         else:
-            # Create new session (use auto-generated session ID, not room name)
+            # Room doesn't have a session yet - create one
             session = session_manager.create_session(request.sid)
             session_id = session['session_id']
             user_sessions[request.sid] = session_id
-            room_to_session[room] = session_id  # Map room to session
-            print(f'User {request.sid} created session {session_id}')
+            room_to_session[room] = session_id
+            print(f'User {request.sid} created session {session_id} for room {room}')
             emit('session_info', {
                 'session_id': session_id,
                 'role': 'A',
@@ -463,8 +478,18 @@ def handle_audio_chunk(data):
     """
     try:
         user_id = request.sid
-        room = active_users.get(user_id, 'default')
+        room = active_users.get(user_id)
         session_id = user_sessions.get(user_id)
+
+        # Check if user has joined a room
+        if not room:
+            print(f"User {user_id} sending audio but hasn't joined a room yet")
+            return
+
+        # Check if user has a session
+        if not session_id:
+            print(f"User {user_id} in room {room} but no session assigned yet")
+            return
 
         # Decode base64 audio data
         audio_data = base64.b64decode(data['audio'])
@@ -499,9 +524,17 @@ def handle_audio_chunk(data):
             except Exception as e:
                 print(f"Error adding to session manager: {e}")
 
-        # Use session_id for AI state tracking instead of room
-        # Get session_id from room mapping
-        tracking_id = room_to_session.get(room, room)  # Fallback to room if no mapping
+        # Emit transcript back to all users in room
+        emit('transcript_update', {
+            'user_id': user_id,
+            'text': transcript,
+            'session_id': session_id
+        }, room=room)
+
+        print(f"Transcribed from {user_id}: {transcript}")
+
+        # Use session_id for AI state tracking
+        tracking_id = session_id
 
         # Also maintain buffer for AI interjection logic (now using session_id)
         if tracking_id not in transcript_buffers:
@@ -512,15 +545,6 @@ def handle_audio_chunk(data):
             'text': transcript,
             'timestamp': time.time()
         })
-
-         # Emit transcript back to all users in room
-        emit('transcript_update', {
-            'user_id': user_id,
-            'text': transcript,
-            'session_id': session_id
-        }, room=room)
-
-        print(f"Transcribed from {user_id}: {transcript}")
 
         # Update last audio activity timestamp using session_id
         last_audio_activity[tracking_id] = time.time()
