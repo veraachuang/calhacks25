@@ -10,6 +10,6 @@ echo "ℹ️  Running without SSL - ngrok will handle HTTPS"
 echo ""
 
 export NO_SSL=1
-python app.py
+python server.py
 
 
