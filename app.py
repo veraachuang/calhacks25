@@ -539,9 +539,9 @@ def handle_audio_chunk(data):
             # Get Claude decision (with silence info)
             decision = claude_decision(context, silence_detected=silence_detected)
 
-            if decision:
-                # Trigger AI interjection with Claude's decision (pass session_id and room)
-                socketio.start_background_task(ai_interject, tracking_id, room, decision)
+            if decision and decision.get('should_interject'):
+                # Trigger agent using agent_manager (pass session_id and room)
+                socketio.start_background_task(trigger_agent_with_decision, tracking_id, room, decision)
 
     except Exception as e:
         print(f"Error processing audio chunk: {e}")
@@ -678,10 +678,10 @@ def check_if_ai_should_interject(session_id):
 
     return False
 
-def ai_interject(session_id, room, claude_decision=None):
+def trigger_agent_with_decision(session_id, room, claude_decision=None):
     """
-    Background task to have AI analyze conversation and provide interjection.
-    Uses Claude decision (if provided), then JanitorAI for response generation.
+    Background task to trigger Janitor AI agent based on Claude's decision.
+    Uses agent_manager for proper orchestration.
 
     Args:
         session_id: Session ID (used for state tracking)
@@ -699,93 +699,54 @@ def ai_interject(session_id, room, claude_decision=None):
     interjection_locks[session_id] = True
 
     try:
-        # Get transcript buffer (using session_id)
-        buffer = transcript_buffers.get(session_id, [])
+        # Log Claude's decision
+        if claude_decision:
+            print(f"Claude decision: should_interject={claude_decision.get('should_interject')}, "
+                  f"intent={claude_decision.get('intent')}, "
+                  f"target_user={claude_decision.get('target_user')}, "
+                  f"response_style={claude_decision.get('response_style')}")
 
-        if not buffer:
-            interjection_locks[session_id] = False
-            return
+        # Trigger agent using agent_manager
+        success, response_text, error = agent_manager.trigger_agent(session_id)
 
-        # Get recent context
-        recent_context = buffer[-AI_CONTEXT_WINDOW:]
-
-        # Combine transcripts into context
-        context = "\n".join([
-            f"User: {t['text']}"
-            for t in recent_context
-        ])
-
-        # Use pre-computed Claude decision if available, otherwise skip
-        if not claude_decision:
-            print("No Claude decision provided, skipping interjection")
-            interjection_locks[session_id] = False
-            return
-
-        print(f"Claude decision: should_interject={claude_decision.get('should_interject')}, "
-              f"intent={claude_decision.get('intent')}, "
-              f"target_user={claude_decision.get('target_user')}, "
-              f"response_style={claude_decision.get('response_style')}")
-
-        # STEP 2: If Claude says to interject, call JanitorAI for response
-        if claude_decision.get('should_interject'):
-            # Build enhanced prompt based on Claude's decision
-            intent = claude_decision.get('intent', '')
-            target = claude_decision.get('target_user', 'both')
-            style = claude_decision.get('response_style', 'conversational')
-
-            # Customize system prompt based on Claude's analysis
-            style_instructions = {
-                'conversational': 'Keep it natural and conversational (2-3 sentences max)',
-                'informative': 'Provide clear, factual information concisely',
-                'supportive': 'Be encouraging and supportive in your response',
-                'question': 'Ask a clarifying or thought-provoking question'
-            }
-
-            system_content = f"You are a helpful AI assistant participating in a video call. {style_instructions.get(style, style_instructions['conversational'])}. Your interjection is aimed at {target}."
-
-            # Generate actual interjection with context from Claude
-            interject_payload = {
-                "model": "ignored",
-                "messages": [
-                    {"role": "system", "content": system_content},
-                    {"role": "user", "content": f"Conversation:\n{context}\n\nContext from analysis: {intent}\n\nProvide a helpful {style} response:"}
-                ],
-                "max_tokens": 150
-            }
-
-            headers = {
-                "Authorization": f"Bearer {JANITOR_AI_KEY}",
-                "Content-Type": "application/json"
-            }
-
-            response = requests.post(JANITOR_AI_URL, headers=headers, json=interject_payload, timeout=30, stream=False)
-            response.raise_for_status()
-
-            # Parse streaming response
-            ai_message = parse_streaming_response(response.text)
-
-            if not ai_message:
-                print("Failed to parse AI interjection response")
-                interjection_locks[session_id] = False
-                return
-
+        if success:
             # Update last interjection time (using session_id)
             last_ai_interjection[session_id] = time.time()
 
-            # Emit AI interjection to room with Claude context
-            socketio.emit('ai_interjection', {
-                'success': True,
-                'message': ai_message,
-                'context_used': len(recent_context),
-                'claude_decision': claude_decision  # Include Claude's analysis
-            }, room=room)
+            # Generate TTS audio for agent response
+            try:
+                audio_bytes = stream_tts(response_text)
+                audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
 
-            print(f"AI interjected in session {session_id} (room {room}): {ai_message}")
+                # Emit agent response to room with Claude context
+                socketio.emit('ai_interjection', {
+                    'success': True,
+                    'message': response_text,
+                    'audio': audio_base64,
+                    'format': 'wav',
+                    'claude_decision': claude_decision,  # Include Claude's analysis
+                    'used_fallback': error is not None
+                }, room=room)
+
+                print(f"Agent interjected in session {session_id} (room {room}): {response_text[:100]}...")
+
+            except Exception as tts_error:
+                # Send text even if TTS fails
+                socketio.emit('ai_interjection', {
+                    'success': True,
+                    'message': response_text,
+                    'audio': None,
+                    'tts_error': str(tts_error),
+                    'claude_decision': claude_decision,
+                    'used_fallback': error is not None
+                }, room=room)
+
+                print(f"Agent interjected (no TTS) in session {session_id}: {response_text[:100]}...")
         else:
-            print(f"Claude decided not to interject: {claude_decision.get('intent')}")
+            print(f"Agent failed for session {session_id}: {error}")
 
     except Exception as e:
-        print(f"Error in AI interjection: {e}")
+        print(f"Error in agent interjection: {e}")
     finally:
         # Release lock (using session_id)
         interjection_locks[session_id] = False
